@@ -135,7 +135,6 @@
     </div>
 
     <button class="save" onclick="saveCalibration()">Save calibration & continue</button>
-    <button class="secondary" onclick="skipCalibrationRerun()">Use existing calibration on this photo</button>
   </div>
 
   <!-- RESULTS -->
@@ -144,11 +143,11 @@
     <div id="confidenceFlag"></div>
     <div class="imgwrap"><canvas id="resultCanvas" class="preview"></canvas></div>
     <label for="indexNumber">Index number</label>
-    <input type="text" id="indexNumber" inputmode="numeric">
+    <input type="text" id="indexNumber" placeholder="e.g. 1234/2026">
     <label for="score">Score</label>
     <input type="number" id="score">
     <button class="save" id="saveBtn" onclick="saveToSheet()">Save to sheet</button>
-    <button class="secondary" onclick="showCalibration(true)">Recalibrate boxes</button>
+    <button class="secondary" onclick="showCalibration()">Recalibrate boxes</button>
     <div id="saveStatus" class="status"></div>
   </div>
 
@@ -216,10 +215,6 @@ function saveCalibration() {
   document.getElementById('calibCard').classList.add('hidden');
   runOcr();
 }
-function skipCalibrationRerun() {
-  document.getElementById('calibCard').classList.add('hidden');
-  runOcr();
-}
 sliders.forEach(id => document.getElementById(id).addEventListener('input', updateOverlay));
 
 function updateOverlay() {
@@ -265,7 +260,11 @@ document.getElementById('cameraInput').addEventListener('change', async (e) => {
     currentImage = img;
     status.textContent = '';
     const hasCalibration = localStorage.getItem('calibration');
-    showCalibration(!hasCalibration);
+    if (hasCalibration) {
+      runOcr(); // already calibrated — skip straight to reading, no extra taps
+    } else {
+      showCalibration(true);
+    }
   };
   img.onerror = () => {
     status.textContent = 'Could not load that photo. Try taking it again.';
@@ -274,15 +273,12 @@ document.getElementById('cameraInput').addEventListener('change', async (e) => {
   img.src = URL.createObjectURL(file);
 });
 
-function showCalibration(forceShow) {
+function showCalibration() {
   document.getElementById('resultCard').classList.add('hidden');
   document.getElementById('calibImg').src = currentImage.src;
   loadCalibration();
   document.getElementById('calibCard').classList.remove('hidden');
   setTimeout(updateOverlay, 50);
-  if (!forceShow) {
-    // still show once so user can confirm alignment on this specific photo
-  }
 }
 
 function cropRegion(img, leftPct, topPct, rightPct, bottomPct) {
