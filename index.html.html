@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exam Mark Capture (Offline OCR)</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  :root {
+    --accent: #185fa5;
+    --bg: #f1efe8;
+    --card: #ffffff;
+    --border: #d3d1c7;
+    --text: #2c2c2a;
+    --muted: #5f5e5a;
+    --danger: #a32d2d;
+    --success: #3b6d11;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 16px;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 8px 0 4px; }
+  p.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .badge {
+    display: inline-block;
+    background: #e4efe0;
+    color: var(--success);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 12px;
+    margin-bottom: 12px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
+  input[type="file"] { display: none; }
+  .camera-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 16px; background: var(--accent); color: white;
+    border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer;
+  }
+  button.secondary {
+    width: 100%; padding: 12px; background: transparent; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 14px; cursor: pointer; color: var(--text); margin-top: 8px;
+  }
+  button.save {
+    width: 100%; padding: 14px; background: var(--success); color: white; border: none;
+    border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .imgwrap { position: relative; width: 100%; margin: 12px 0; }
+  img.preview, canvas.preview { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+  .status { font-size: 13px; margin: 8px 0; min-height: 18px; }
+  .status.error { color: var(--danger); }
+  .status.ok { color: var(--success); }
+  .flag { background: #faeeda; color: #854f0b; font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-bottom: 10px; }
+  details summary { cursor: pointer; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .log { font-size: 12px; color: var(--muted); }
+  .log-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .hidden { display: none; }
+  .slider-row { margin-bottom: 14px; }
+  .slider-row .val { float: right; color: var(--accent); font-weight: 600; }
+  input[type="range"] { width: 100%; }
+  .overlay-box {
+    position: absolute; border: 2px solid #ff3b30; background: rgba(255,59,48,0.15); pointer-events: none;
+  }
+  .calib-group { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
+  .calib-group h4 { margin: 0 0 8px; font-size: 13px; color: var(--accent); }
+</style>
+</head>
+<body>
+
+  <h1>Exam mark capture</h1>
+  <p class="sub">Fully offline OCR — no per-scan charges, no cloud account needed.</p>
+
+  <!-- CAPTURE -->
+  <div class="card" id="captureCard">
+    <div class="badge">Step 1 — capture</div>
+    <button class="camera-btn" onclick="document.getElementById('cameraInput').click()">📷 Scan booklet cover</button>
+    <input type="file" id="cameraInput" accept="image/*" capture="environment">
+    <p style="font-size:12px;color:var(--muted);margin-top:10px;">
+      Tip: lay the booklet flat, fill the frame with the cover page, avoid shadows and glare.
+    </p>
+  </div>
+
+  <!-- CALIBRATION (shown first time / on demand) -->
+  <div class="card hidden" id="calibCard">
+    <div class="badge">Calibration</div>
+    <p style="font-size:13px;color:var(--muted);margin-top:0;">
+      Do this once. Adjust the red boxes so they line up exactly over the index-number boxes and score boxes on your captured photo, then save.
+    </p>
+    <div class="imgwrap" id="calibImgWrap">
+      <img id="calibImg" class="preview">
+      <div class="overlay-box" id="indexOverlay"></div>
+      <div class="overlay-box" id="scoreOverlay"></div>
+    </div>
+
+    <div class="calib-group">
+      <h4>Index number row</h4>
+      <div class="slider-row"><label>Top <span class="val" id="idxTopVal"></span></label><input type="range" id="idxTop" min="0" max="100" value="18"></div>
+      <div class="slider-row"><label>Bottom <span class="val" id="idxBottomVal"></span></label><input type="range" id="idxBottom" min="0" max="100" value="28"></div>
+      <div class="slider-row"><label>Left <span class="val" id="idxLeftVal"></span></label><input type="range" id="idxLeft" min="0" max="100" value="10"></div>
+      <div class="slider-row"><label>Right <span class="val" id="idxRightVal"></span></label><input type="range" id="idxRight" min="0" max="100" value="55"></div>
+      <div class="slider-row"><label>Number of digits <span class="val" id="idxDigitsVal"></span></label><input type="range" id="idxDigits" min="1" max="10" value="6"></div>
+    </div>
+
+    <div class="calib-group">
+      <h4>Score row</h4>
+      <div class="slider-row"><label>Top <span class="val" id="scoreTopVal"></span></label><input type="range" id="scoreTop" min="0" max="100" value="38"></div>
+      <div class="slider-row"><label>Bottom <span class="val" id="scoreBottomVal"></span></label><input type="range" id="scoreBottom" min="0" max="100" value="48"></div>
+      <div class="slider-row"><label>Left <span class="val" id="scoreLeftVal"></span></label><input type="range" id="scoreLeft" min="0" max="100" value="10"></div>
+      <div class="slider-row"><label>Right <span class="val" id="scoreRight" ></span><input type="range" id="scoreRightSlider" min="0" max="100" value="35"></div>
+      <div class="slider-row"><label>Number of digits <span class="val" id="scoreDigitsVal"></span></label><input type="range" id="scoreDigits" min="1" max="5" value="3"></div>
+    </div>
+
+    <button class="save" onclick="saveCalibration()">Save calibration & continue</button>
+    <button class="secondary" onclick="skipCalibrationRerun()">Use existing calibration on this photo</button>
+  </div>
+
+  <!-- RESULTS -->
+  <div class="card hidden" id="resultCard">
+    <div class="badge">Step 2 — verify</div>
+    <div id="confidenceFlag"></div>
+    <div class="imgwrap"><canvas id="resultCanvas" class="preview"></canvas></div>
+    <label for="indexNumber">Index number</label>
+    <input type="text" id="indexNumber" inputmode="numeric">
+    <label for="score">Score</label>
+    <input type="number" id="score">
+    <button class="save" id="saveBtn" onclick="saveToSheet()">Save to sheet</button>
+    <button class="secondary" onclick="showCalibration(true)">Recalibrate boxes</button>
+    <div id="saveStatus" class="status"></div>
+  </div>
+
+  <div id="captureStatus" class="status" style="text-align:center;"></div>
+
+  <details>
+    <summary>Settings</summary>
+    <div class="card">
+      <label for="scriptUrl">Google Apps Script web app URL</label>
+      <input type="text" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec">
+      <button class="secondary" onclick="saveSettings()">Save settings</button>
+      <div id="settingsStatus" class="status"></div>
+    </div>
+  </details>
+
+  <div class="card">
+    <label>Recent submissions (this device)</label>
+    <div class="log" id="log">No submissions yet.</div>
+  </div>
+
+<script>
+const S = { get: k => localStorage.getItem(k) || '', set: (k, v) => localStorage.setItem(k, v) };
+document.getElementById('scriptUrl').value = S.get('sheet_url');
+
+function saveSettings() {
+  S.set('sheet_url', document.getElementById('scriptUrl').value.trim());
+  const el = document.getElementById('settingsStatus');
+  el.textContent = 'Settings saved.'; el.className = 'status ok';
+}
+
+let currentImage = null; // HTMLImageElement of the captured photo
+
+const sliders = ['idxTop','idxBottom','idxLeft','idxRight','idxDigits','scoreTop','scoreBottom','scoreLeft','scoreRightSlider','scoreDigits'];
+function loadCalibration() {
+  const saved = JSON.parse(localStorage.getItem('calibration') || 'null');
+  if (saved) {
+    document.getElementById('idxTop').value = saved.idxTop;
+    document.getElementById('idxBottom').value = saved.idxBottom;
+    document.getElementById('idxLeft').value = saved.idxLeft;
+    document.getElementById('idxRight').value = saved.idxRight;
+    document.getElementById('idxDigits').value = saved.idxDigits;
+    document.getElementById('scoreTop').value = saved.scoreTop;
+    document.getElementById('scoreBottom').value = saved.scoreBottom;
+    document.getElementById('scoreLeft').value = saved.scoreLeft;
+    document.getElementById('scoreRightSlider').value = saved.scoreRight;
+    document.getElementById('scoreDigits').value = saved.scoreDigits;
+  }
+}
+function getCalibration() {
+  return {
+    idxTop: +document.getElementById('idxTop').value,
+    idxBottom: +document.getElementById('idxBottom').value,
+    idxLeft: +document.getElementById('idxLeft').value,
+    idxRight: +document.getElementById('idxRight').value,
+    idxDigits: +document.getElementById('idxDigits').value,
+    scoreTop: +document.getElementById('scoreTop').value,
+    scoreBottom: +document.getElementById('scoreBottom').value,
+    scoreLeft: +document.getElementById('scoreLeft').value,
+    scoreRight: +document.getElementById('scoreRightSlider').value,
+    scoreDigits: +document.getElementById('scoreDigits').value,
+  };
+}
+function saveCalibration() {
+  localStorage.setItem('calibration', JSON.stringify(getCalibration()));
+  document.getElementById('calibCard').classList.add('hidden');
+  runOcr();
+}
+function skipCalibrationRerun() {
+  document.getElementById('calibCard').classList.add('hidden');
+  runOcr();
+}
+sliders.forEach(id => document.getElementById(id).addEventListener('input', updateOverlay));
+
+function updateOverlay() {
+  const c = getCalibration();
+  ['idxTop','idxBottom','idxLeft','idxRight','idxDigits','scoreTop','scoreBottom','scoreLeft','scoreDigits'].forEach(k => {
+    const el = document.getElementById(k + 'Val');
+    if (el) el.textContent = c[k.replace('scoreRightSlider','scoreRight')] ?? document.getElementById(k).value;
+  });
+  document.getElementById('idxTopVal').textContent = c.idxTop + '%';
+  document.getElementById('idxBottomVal').textContent = c.idxBottom + '%';
+  document.getElementById('idxLeftVal').textContent = c.idxLeft + '%';
+  document.getElementById('idxRightVal').textContent = c.idxRight + '%';
+  document.getElementById('idxDigitsVal').textContent = c.idxDigits;
+  document.getElementById('scoreTopVal').textContent = c.scoreTop + '%';
+  document.getElementById('scoreBottomVal').textContent = c.scoreBottom + '%';
+  document.getElementById('scoreDigitsVal').textContent = c.scoreDigits;
+
+  const wrap = document.getElementById('calibImgWrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  const idx = document.getElementById('indexOverlay');
+  idx.style.left = (c.idxLeft/100*w) + 'px';
+  idx.style.top = (c.idxTop/100*h) + 'px';
+  idx.style.width = ((c.idxRight-c.idxLeft)/100*w) + 'px';
+  idx.style.height = ((c.idxBottom-c.idxTop)/100*h) + 'px';
+
+  const sc = document.getElementById('scoreOverlay');
+  sc.style.left = (c.scoreLeft/100*w) + 'px';
+  sc.style.top = (c.scoreTop/100*h) + 'px';
+  sc.style.width = ((c.scoreRight-c.scoreLeft)/100*w) + 'px';
+  sc.style.height = ((c.scoreBottom-c.scoreTop)/100*h) + 'px';
+}
+
+document.getElementById('cameraInput').addEventListener('change', async (e) => {
+  const status = document.getElementById('captureStatus');
+  const file = e.target.files[0];
+  if (!file) { status.textContent = 'No photo received — try again.'; status.className = 'status error'; return; }
+
+  status.textContent = 'Photo received, preparing...';
+  status.className = 'status';
+
+  const img = new Image();
+  img.onload = () => {
+    currentImage = img;
+    status.textContent = '';
+    const hasCalibration = localStorage.getItem('calibration');
+    showCalibration(!hasCalibration);
+  };
+  img.onerror = () => {
+    status.textContent = 'Could not load that photo. Try taking it again.';
+    status.className = 'status error';
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+function showCalibration(forceShow) {
+  document.getElementById('resultCard').classList.add('hidden');
+  document.getElementById('calibImg').src = currentImage.src;
+  loadCalibration();
+  document.getElementById('calibCard').classList.remove('hidden');
+  setTimeout(updateOverlay, 50);
+  if (!forceShow) {
+    // still show once so user can confirm alignment on this specific photo
+  }
+}
+
+function cropRegion(img, leftPct, topPct, rightPct, bottomPct) {
+  const canvas = document.createElement('canvas');
+  const sx = leftPct/100 * img.naturalWidth;
+  const sy = topPct/100 * img.naturalHeight;
+  const sw = (rightPct-leftPct)/100 * img.naturalWidth;
+  const sh = (bottomPct-topPct)/100 * img.naturalHeight;
+  canvas.width = sw; canvas.height = sh;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  return canvas;
+}
+
+function preprocess(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.3*d[i] + 0.59*d[i+1] + 0.11*d[i+2];
+    const v = gray < 150 ? 0 : 255; // binarize
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas;
+}
+
+let workerPromise = null;
+async function getWorker() {
+  if (!workerPromise) {
+    workerPromise = (async () => {
+      const worker = await Tesseract.createWorker('eng');
+      await worker.setParameters({ tessedit_char_whitelist: '0123456789' });
+      return worker;
+    })();
+  }
+  return workerPromise;
+}
+
+async function ocrDigitBox(canvas) {
+  const worker = await getWorker();
+  const { data } = await worker.recognize(canvas);
+  const text = (data.text || '').replace(/\D/g, '');
+  return { text: text.length ? text[0] : '', confidence: data.confidence || 0 };
+}
+
+async function runOcr() {
+  const status = document.getElementById('captureStatus');
+  status.textContent = 'Reading boxes... this can take a few seconds.';
+  status.className = 'status';
+
+  const c = getCalibration();
+  document.getElementById('resultCard').classList.remove('hidden');
+
+  // draw full preview to result canvas
+  const resultCanvas = document.getElementById('resultCanvas');
+  resultCanvas.width = currentImage.naturalWidth;
+  resultCanvas.height = currentImage.naturalHeight;
+  resultCanvas.getContext('2d').drawImage(currentImage, 0, 0);
+
+  try {
+    const indexDigits = await readRow(c.idxLeft, c.idxTop, c.idxRight, c.idxBottom, c.idxDigits);
+    const scoreDigits = await readRow(c.scoreLeft, c.scoreTop, c.scoreRight, c.scoreBottom, c.scoreDigits);
+
+    const indexNumber = indexDigits.map(d => d.text || '?').join('');
+    const score = scoreDigits.map(d => d.text || '?').join('');
+    const allConf = [...indexDigits, ...scoreDigits].map(d => d.confidence);
+    const avgConf = allConf.reduce((a,b) => a+b, 0) / (allConf.length || 1);
+
+    document.getElementById('indexNumber').value = indexNumber.includes('?') ? '' : indexNumber;
+    document.getElementById('score').value = score.includes('?') ? '' : score;
+
+    const flagEl = document.getElementById('confidenceFlag');
+    if (avgConf < 70 || indexNumber.includes('?') || score.includes('?')) {
+      flagEl.innerHTML = '<div class="flag">⚠ Low confidence or unreadable digit — please check carefully against the booklet and correct below.</div>';
+    } else {
+      flagEl.innerHTML = '';
+    }
+    status.textContent = 'Done. Please verify the values below.';
+    status.className = 'status ok';
+  } catch (err) {
+    status.textContent = 'OCR failed: ' + err.message + '. Enter values manually below.';
+    status.className = 'status error';
+  }
+}
+
+async function readRow(left, top, right, bottom, count) {
+  const results = [];
+  const width = right - left;
+  for (let i = 0; i < count; i++) {
+    const boxLeft = left + (width/count)*i;
+    const boxRight = left + (width/count)*(i+1);
+    let canvas = cropRegion(currentImage, boxLeft, top, boxRight, bottom);
+    canvas = preprocess(canvas);
+    const r = await ocrDigitBox(canvas);
+    results.push(r);
+  }
+  return results;
+}
+
+async function saveToSheet() {
+  const scriptUrl = S.get('sheet_url');
+  const indexNumber = document.getElementById('indexNumber').value.trim();
+  const score = document.getElementById('score').value.trim();
+  const statusEl = document.getElementById('saveStatus');
+
+  if (!indexNumber || !score) { statusEl.textContent = 'Enter both index number and score first.'; statusEl.className = 'status error'; return; }
+  if (!scriptUrl) { statusEl.textContent = 'Google Sheet connection not set (see Settings).'; statusEl.className = 'status error'; return; }
+
+  const saveBtn = document.getElementById('saveBtn');
+  saveBtn.disabled = true;
+  statusEl.textContent = 'Saving...'; statusEl.className = 'status';
+
+  try {
+    await fetch(scriptUrl, {
+      method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ indexNumber, score, timestamp: new Date().toISOString() })
+    });
+    statusEl.textContent = 'Saved to sheet.'; statusEl.className = 'status ok';
+    addToLog(indexNumber, score);
+    resetForm();
+  } catch (err) {
+    statusEl.textContent = 'Save failed: ' + err.message; statusEl.className = 'status error';
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+function addToLog(indexNumber, score) {
+  const logs = JSON.parse(localStorage.getItem('submission_log') || '[]');
+  logs.unshift({ indexNumber, score, time: new Date().toLocaleTimeString() });
+  localStorage.setItem('submission_log', JSON.stringify(logs.slice(0, 20)));
+  renderLog();
+}
+function renderLog() {
+  const logs = JSON.parse(localStorage.getItem('submission_log') || '[]');
+  const el = document.getElementById('log');
+  if (logs.length === 0) { el.textContent = 'No submissions yet.'; return; }
+  el.innerHTML = logs.map(l => `<div class="log-row"><span>#${l.indexNumber} — ${l.score}</span><span>${l.time}</span></div>`).join('');
+}
+function resetForm() {
+  currentImage = null;
+  document.getElementById('resultCard').classList.add('hidden');
+  document.getElementById('cameraInput').value = '';
+  document.getElementById('captureStatus').textContent = '';
+}
+renderLog();
+</script>
+</body>
+</html>
