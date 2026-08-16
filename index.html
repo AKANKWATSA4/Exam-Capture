@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Exam Mark Capture (offline, free)</title>
+<title>Exam Mark Capture (offline, free, real-time)</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
@@ -22,11 +22,9 @@
   .badge { display: inline-block; background: #e4efe0; color: var(--success); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px; margin-bottom: 12px; }
   .badge.scan { background: #dbe8f5; color: var(--accent); }
   .badge.low { background: #f5e6d8; color: #8a4b12; }
+  .badge.saved { background: #e4efe0; color: var(--success); }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   input[type="text"], input[type="number"] { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; margin-bottom: 12px; }
-  .grid4 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
-  .grid4 label { margin-bottom: 2px; }
-  .grid4 input { margin-bottom: 6px; }
   button.secondary { width: 100%; padding: 12px; background: transparent; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; cursor: pointer; color: var(--text); margin-top: 8px; }
   button.save { width: 100%; padding: 14px; background: var(--success); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.start { width: 100%; padding: 16px; background: var(--accent); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
@@ -34,10 +32,6 @@
   .video-wrap { position: relative; width: 100%; border-radius: 10px; overflow: hidden; background: #000; }
   video, #freezeCanvas { width: 100%; display: block; }
   #freezeCanvas { position: absolute; top: 0; left: 0; }
-  .guide-box { position: absolute; border: 2px solid; border-radius: 4px; pointer-events: none; }
-  .guide-box.idx { border-color: #4ea1ff; }
-  .guide-box.score { border-color: #ffd23f; }
-  .guide-box span { position: absolute; top: -18px; left: 0; font-size: 10px; color: white; background: rgba(0,0,0,0.6); padding: 1px 5px; border-radius: 4px; }
   .scan-status { text-align: center; font-size: 13px; color: white; background: rgba(0,0,0,0.55); position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 8px; border-radius: 8px; }
   .status { font-size: 13px; margin: 8px 0; min-height: 18px; }
   .status.error { color: var(--danger); }
@@ -57,8 +51,8 @@
 </head>
 <body>
 
-  <h1>Exam mark capture — offline</h1>
-  <p class="sub">100% on-device — no internet, no API, no cost. Line up each booklet with the two guide boxes, hold steady, and it reads both fields automatically (3-frame consensus for accuracy).</p>
+  <h1>Exam mark capture — offline, real-time</h1>
+  <p class="sub">100% on-device, no internet, no cost. Hold the whole page in view — the topmost text on the page is read as the index number, the next block below it as the score — and confident reads are written to your sheet instantly.</p>
 
   <div class="card" id="scanCard">
     <div class="badge scan">Live scanning — fully offline</div>
@@ -66,14 +60,12 @@
     <div class="video-wrap hidden" id="videoWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="freezeCanvas" class="hidden"></canvas>
-      <div class="guide-box idx" id="guideIdx"><span>Index #</span></div>
-      <div class="guide-box score" id="guideScore"><span>Score</span></div>
-      <div class="scan-status" id="scanStatus">Align booklet with the guide boxes...</div>
+      <div class="scan-status" id="scanStatus">Point camera at the full page...</div>
     </div>
     <button class="secondary hidden" id="stopBtn" onclick="stopScanning()">Stop scanning</button>
     <div class="toggle-row">
       <input type="checkbox" id="autoSaveToggle">
-      <label for="autoSaveToggle" style="margin:0;">Auto-save to sheet instantly when confidence is high (skip manual review)</label>
+      <label for="autoSaveToggle" style="margin:0;">Write to sheet instantly when confidence is high (uncheck to always review first)</label>
     </div>
   </div>
 
@@ -83,11 +75,11 @@
 
     <div class="crop-pair">
       <div>
-        <div class="crop-label">Index crop:</div>
+        <div class="crop-label">Read as index number (top):</div>
         <canvas id="idxCropView" class="detected-crop"></canvas>
       </div>
       <div>
-        <div class="crop-label">Score crop:</div>
+        <div class="crop-label">Read as score (below):</div>
         <canvas id="scoreCropView" class="detected-crop"></canvas>
       </div>
     </div>
@@ -104,56 +96,15 @@
   </div>
 
   <details>
-    <summary>Calibrate guide boxes</summary>
-    <div class="card">
-      <p style="font-size:12px;color:var(--muted);margin-top:0;">Tap "Start scanning" to see the boxes live, then tweak these percentages (of frame width/height) until they sit over the index number and score fields on your booklet cover. Values save automatically as you type.</p>
-      <div class="grid4">
-        <div>
-          <label for="idxTop">Index — top %</label>
-          <input type="number" id="idxTop" min="0" max="100">
-        </div>
-        <div>
-          <label for="idxLeft">Index — left %</label>
-          <input type="number" id="idxLeft" min="0" max="100">
-        </div>
-        <div>
-          <label for="idxWidth">Index — width %</label>
-          <input type="number" id="idxWidth" min="1" max="100">
-        </div>
-        <div>
-          <label for="idxHeight">Index — height %</label>
-          <input type="number" id="idxHeight" min="1" max="100">
-        </div>
-        <div>
-          <label for="scoreTop">Score — top %</label>
-          <input type="number" id="scoreTop" min="0" max="100">
-        </div>
-        <div>
-          <label for="scoreLeft">Score — left %</label>
-          <input type="number" id="scoreLeft" min="0" max="100">
-        </div>
-        <div>
-          <label for="scoreWidth">Score — width %</label>
-          <input type="number" id="scoreWidth" min="1" max="100">
-        </div>
-        <div>
-          <label for="scoreHeight">Score — height %</label>
-          <input type="number" id="scoreHeight" min="1" max="100">
-        </div>
-      </div>
-      <label for="maxScore" style="margin-top:8px;">Max possible score (for validation)</label>
-      <input type="number" id="maxScore" min="1">
-    </div>
-  </details>
-
-  <details>
     <summary>Settings</summary>
     <div class="card">
       <label for="scriptUrl">Google Apps Script web app URL</label>
       <input type="text" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec">
       <button class="secondary" onclick="saveSettings()">Save settings</button>
       <div id="settingsStatus" class="status"></div>
-      <p style="font-size:12px;color:var(--muted);margin-top:10px;">This is only used to append rows to your sheet — no API key, no per-scan cost. Reading is entirely on-device.</p>
+      <label for="maxScore" style="margin-top:12px;">Max possible score (for validation)</label>
+      <input type="number" id="maxScore" min="1">
+      <p style="font-size:12px;color:var(--muted);margin-top:6px;">The Apps Script URL is only used to append rows to your sheet — no API key, no per-scan cost. All reading happens on-device.</p>
     </div>
   </details>
 
@@ -166,8 +117,12 @@
 const S = { get: k => localStorage.getItem(k) || '', set: (k, v) => localStorage.setItem(k, v) };
 
 document.getElementById('scriptUrl').value = S.get('sheet_url');
-document.getElementById('autoSaveToggle').checked = S.get('auto_save') === '1';
-document.getElementById('autoSaveToggle').addEventListener('change', e => S.set('auto_save', e.target.checked ? '1' : '0'));
+
+const autoSaveEl = document.getElementById('autoSaveToggle');
+const storedAutoSave = localStorage.getItem('auto_save');
+autoSaveEl.checked = storedAutoSave === null ? true : storedAutoSave === '1'; // real-time by default
+if (storedAutoSave === null) S.set('auto_save', '1');
+autoSaveEl.addEventListener('change', e => S.set('auto_save', e.target.checked ? '1' : '0'));
 
 function saveSettings() {
   S.set('sheet_url', document.getElementById('scriptUrl').value.trim());
@@ -175,56 +130,9 @@ function saveSettings() {
   el.textContent = 'Settings saved.'; el.className = 'status ok';
 }
 
-// ---- Guide box calibration (persisted as % of frame) ----
-const DEFAULT_GUIDES = {
-  index: { top: 12, left: 10, width: 45, height: 14 },
-  score: { top: 32, left: 10, width: 25, height: 14 }
-};
-function loadGuides() {
-  try {
-    const raw = localStorage.getItem('guides');
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
-  return JSON.parse(JSON.stringify(DEFAULT_GUIDES));
-}
-function saveGuides(g) { localStorage.setItem('guides', JSON.stringify(g)); }
-
-let guides = loadGuides();
-
-const guideFields = [
-  ['idxTop', 'index', 'top'], ['idxLeft', 'index', 'left'], ['idxWidth', 'index', 'width'], ['idxHeight', 'index', 'height'],
-  ['scoreTop', 'score', 'top'], ['scoreLeft', 'score', 'left'], ['scoreWidth', 'score', 'width'], ['scoreHeight', 'score', 'height']
-];
-guideFields.forEach(([id, box, prop]) => {
-  const el = document.getElementById(id);
-  el.value = guides[box][prop];
-  el.addEventListener('input', () => {
-    const v = parseFloat(el.value);
-    if (!isNaN(v)) {
-      guides[box][prop] = v;
-      saveGuides(guides);
-      renderGuideOverlay();
-    }
-  });
-});
-
 const maxScoreEl = document.getElementById('maxScore');
 maxScoreEl.value = S.get('max_score') || '100';
 maxScoreEl.addEventListener('input', () => S.set('max_score', maxScoreEl.value));
-
-function renderGuideOverlay() {
-  const idxEl = document.getElementById('guideIdx');
-  const scoreEl = document.getElementById('guideScore');
-  idxEl.style.top = guides.index.top + '%';
-  idxEl.style.left = guides.index.left + '%';
-  idxEl.style.width = guides.index.width + '%';
-  idxEl.style.height = guides.index.height + '%';
-  scoreEl.style.top = guides.score.top + '%';
-  scoreEl.style.left = guides.score.left + '%';
-  scoreEl.style.width = guides.score.width + '%';
-  scoreEl.style.height = guides.score.height + '%';
-}
-renderGuideOverlay();
 
 let stream = null;
 let video, freezeCanvas;
@@ -257,7 +165,7 @@ async function startScanning() {
     armed = true;
     stableCount = 0;
     lastFrameData = null;
-    setScanStatus('Align booklet with the guide boxes...');
+    setScanStatus('Point camera at the full page...');
     loopHandle = setInterval(analyzeFrame, SAMPLE_MS);
   } catch (err) {
     setScanStatus('Camera access failed: ' + err.message);
@@ -294,7 +202,7 @@ function analyzeFrame() {
       if (avgDiff > CHANGE_THRESHOLD) {
         armed = true;
         stableCount = 0;
-        setScanStatus('Ready — align next booklet...');
+        setScanStatus('Ready — hold next page steady...');
       }
     } else if (avgDiff < DIFF_THRESHOLD) {
       stableCount++;
@@ -302,7 +210,7 @@ function analyzeFrame() {
       if (stableCount >= STABLE_FRAMES_NEEDED) captureAndRead();
     } else {
       stableCount = 0;
-      setScanStatus('Align booklet with the guide boxes...');
+      setScanStatus('Point camera at the full page...');
     }
   }
   lastFrameData = frame;
@@ -332,22 +240,6 @@ async function captureAndRead() {
 
   await readAndShow(frames);
   loopHandle = setInterval(analyzeFrame, SAMPLE_MS);
-}
-
-// ---- Guided crop: cut exactly the calibrated regions instead of guessing at pixel bands ----
-function cropByGuide(frameCanvas, guide) {
-  const w = frameCanvas.width, h = frameCanvas.height;
-  const left = Math.round(guide.left / 100 * w);
-  const top = Math.round(guide.top / 100 * h);
-  const cw = Math.max(4, Math.round(guide.width / 100 * w));
-  const ch = Math.max(4, Math.round(guide.height / 100 * h));
-  const scale = ch < 90 ? 3 : 2;
-  const c = document.createElement('canvas');
-  c.width = cw * scale; c.height = ch * scale;
-  const ctx = c.getContext('2d');
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(frameCanvas, left, top, cw, ch, 0, 0, c.width, c.height);
-  return c;
 }
 
 // ---- Otsu adaptive thresholding — more robust to lighting than a fixed cutoff ----
@@ -383,6 +275,73 @@ function otsuBinarize(sourceCanvas) {
   return c;
 }
 
+// ---- Auto-detect content bands on the whole page: topmost = index number, next = score ----
+function findContentBands(binCanvas) {
+  const w = binCanvas.width, h = binCanvas.height;
+  const data = binCanvas.getContext('2d').getImageData(0, 0, w, h).data;
+  const rowDark = new Array(h).fill(0);
+  for (let y = 0; y < h; y++) {
+    let count = 0;
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4] < 128) count++;
+    }
+    rowDark[y] = count;
+  }
+
+  const rowThreshold = w * 0.04;
+  const minGapRows = Math.max(6, Math.floor(h * 0.012));
+  const minBandHeight = Math.max(10, Math.floor(h * 0.018));
+
+  const bands = [];
+  let inBand = false, start = 0, gap = 0;
+  for (let y = 0; y < h; y++) {
+    if (rowDark[y] > rowThreshold) {
+      if (!inBand) { inBand = true; start = y; }
+      gap = 0;
+    } else if (inBand) {
+      gap++;
+      if (gap > minGapRows) {
+        const end = y - gap;
+        if (end - start >= minBandHeight) bands.push({ top: start, bottom: end });
+        inBand = false;
+      }
+    }
+  }
+  if (inBand) {
+    const end = h - 1;
+    if (end - start >= minBandHeight) bands.push({ top: start, bottom: end });
+  }
+  return bands;
+}
+
+function tightenHorizontal(binCanvas, top, bottom) {
+  const w = binCanvas.width;
+  const data = binCanvas.getContext('2d').getImageData(0, top, w, bottom - top).data;
+  const h = bottom - top;
+  let left = w, right = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4] < 128) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  if (left > right) return { left: 0, right: w };
+  const pad = Math.round(w * 0.01);
+  return { left: Math.max(0, left - pad), right: Math.min(w, right + pad) };
+}
+
+function cropRegion(sourceCanvas, left, top, w, h) {
+  const scale = h < 90 ? 3 : 2;
+  const c = document.createElement('canvas');
+  c.width = Math.max(4, w) * scale; c.height = Math.max(4, h) * scale;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(sourceCanvas, left, top, w, h, 0, 0, c.width, c.height);
+  return c;
+}
+
 let workerPromise = null;
 async function getWorker() {
   if (!workerPromise) workerPromise = (async () => await Tesseract.createWorker('eng'))();
@@ -409,12 +368,26 @@ function agreementCount(arr, value) { return arr.filter(v => v === value).length
 
 async function readMultiFrame(frames) {
   const idxReadings = [], scoreReadings = [];
-  let idxConfSum = 0, scoreConfSum = 0;
+  let idxConfSum = 0, scoreConfSum = 0, framesWithTwoBands = 0;
   let lastIdxCrop = null, lastScoreCrop = null;
 
   for (const frame of frames) {
-    const idxCrop = otsuBinarize(cropByGuide(frame, guides.index));
-    const scoreCrop = otsuBinarize(cropByGuide(frame, guides.score));
+    const bin = otsuBinarize(frame);
+    const bands = findContentBands(bin);
+
+    if (bands.length < 2) {
+      idxReadings.push(''); scoreReadings.push('');
+      continue;
+    }
+    framesWithTwoBands++;
+
+    const indexBand = bands[0];
+    const scoreBand = bands[1];
+    const idxH = tightenHorizontal(bin, indexBand.top, indexBand.bottom);
+    const scoreH = tightenHorizontal(bin, scoreBand.top, scoreBand.bottom);
+
+    const idxCrop = cropRegion(frame, idxH.left, indexBand.top, idxH.right - idxH.left, indexBand.bottom - indexBand.top);
+    const scoreCrop = cropRegion(frame, scoreH.left, scoreBand.top, scoreH.right - scoreH.left, scoreBand.bottom - scoreBand.top);
     lastIdxCrop = idxCrop; lastScoreCrop = scoreCrop;
 
     const idxR = await ocrLine(idxCrop, '0123456789/');
@@ -430,14 +403,18 @@ async function readMultiFrame(frames) {
   const score = modeOf(scoreReadings);
   const idxAgree = agreementCount(idxReadings, indexNumber);
   const scoreAgree = agreementCount(scoreReadings, score);
-  const avgEngineConf = (idxConfSum + scoreConfSum) / (2 * frames.length);
+  const avgEngineConf = framesWithTwoBands ? (idxConfSum + scoreConfSum) / (2 * framesWithTwoBands) : 0;
 
-  return { indexNumber, score, idxAgree, scoreAgree, totalFrames: frames.length, avgEngineConf, idxCrop: lastIdxCrop, scoreCrop: lastScoreCrop };
+  return {
+    indexNumber, score, idxAgree, scoreAgree, totalFrames: frames.length,
+    framesWithTwoBands, avgEngineConf, idxCrop: lastIdxCrop, scoreCrop: lastScoreCrop
+  };
 }
 
 function computeConfidence(r) {
   const maxScore = parseFloat(S.get('max_score')) || null;
   const issues = [];
+  if (r.framesWithTwoBands === 0) issues.push('could not find two text regions on the page — try better framing/lighting');
   if (!r.indexNumber) issues.push('index number not read');
   if (!r.score) issues.push('score not read');
   if (r.score && maxScore && Number(r.score) > maxScore) issues.push(`score exceeds max of ${maxScore}`);
@@ -464,8 +441,8 @@ async function readAndShow(frames) {
     const r = await readMultiFrame(frames);
     const { confidence, notes } = computeConfidence(r);
 
-    drawToView('idxCropView', r.idxCrop);
-    drawToView('scoreCropView', r.scoreCrop);
+    if (r.idxCrop) drawToView('idxCropView', r.idxCrop);
+    if (r.scoreCrop) drawToView('scoreCropView', r.scoreCrop);
 
     lastReading = { confLabel: confidence };
 
@@ -476,18 +453,18 @@ async function readAndShow(frames) {
 
     const badge = document.getElementById('resultBadge');
     const needsReview = confidence !== 'high';
-    badge.textContent = needsReview ? 'Low/medium confidence — verify carefully' : 'High confidence — quick check';
+    badge.textContent = needsReview ? 'Low/medium confidence — verify carefully' : 'High confidence';
     badge.className = 'badge' + (needsReview ? ' low' : '');
 
     const flagEl = document.getElementById('confidenceFlag');
     flagEl.innerHTML = needsReview ? `<div class="flag">⚠ ${notes}</div>` : '';
 
     document.getElementById('resultCard').classList.remove('hidden');
-    setScanStatus('Ready — align next booklet...');
+    setScanStatus('Ready — hold next page steady...');
 
     const autoSave = document.getElementById('autoSaveToggle').checked;
     if (autoSave && !needsReview) {
-      await saveToSheet();
+      await saveToSheet(true);
     }
   } catch (err) {
     setScanStatus('Reading failed: ' + err.message);
@@ -538,15 +515,21 @@ async function trySyncPendingSaves() {
 window.addEventListener('online', trySyncPendingSaves);
 trySyncPendingSaves();
 
-async function saveToSheet() {
+async function saveToSheet(fromAutoSave) {
   const scriptUrl = S.get('sheet_url');
   const indexNumber = document.getElementById('indexNumber').value.trim();
   const score = document.getElementById('score').value.trim();
   const confidence = lastReading ? lastReading.confLabel : '';
   const statusEl = document.getElementById('saveStatus');
 
-  if (!indexNumber || !score) { statusEl.textContent = 'Enter both index number and score first.'; statusEl.className = 'status error'; return; }
-  if (!scriptUrl) { statusEl.textContent = 'Google Sheet connection not set (see Settings).'; statusEl.className = 'status error'; return; }
+  if (!indexNumber || !score) {
+    if (!fromAutoSave) { statusEl.textContent = 'Enter both index number and score first.'; statusEl.className = 'status error'; }
+    return;
+  }
+  if (!scriptUrl) {
+    if (!fromAutoSave) { statusEl.textContent = 'Google Sheet connection not set (see Settings).'; statusEl.className = 'status error'; }
+    return;
+  }
 
   const saveBtn = document.getElementById('saveBtn');
   saveBtn.disabled = true;
