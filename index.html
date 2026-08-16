@@ -101,7 +101,7 @@
       </div>
       <div class="scan-status" id="scanStatus">Position the boxes, then tap Capture.</div>
     </div>
-    <button class="capture hidden" id="captureBtn" onclick="captureCropped()">📷 Capture & Crop</button>
+    <button class="capture hidden" id="captureBtn" onclick="cropAndCapture()">✂️ Crop & Capture</button>
     <button class="secondary hidden" id="stopBtn" onclick="stopScanning()">Stop scanning</button>
   </div>
 
@@ -310,9 +310,17 @@ async function ocrLine(canvas, whitelist) {
 
 let lastReading = null;
 
-async function captureCropped() {
+async function cropAndCapture() {
   if (!video || video.readyState < 2) return;
 
+  setScanStatus('Reading box positions...');
+
+  // 1. CROP FIRST — work out exactly which source-pixel rectangles the two
+  //    boxes cover while the video is still live, before anything is frozen.
+  const idxRect = mapBoxToSource(indexBoxEl);
+  const scoreRect = mapBoxToSource(scoreBoxEl);
+
+  // 2. CAPTURE — now freeze the frame those rectangles were measured against.
   freezeCanvas.width = video.videoWidth;
   freezeCanvas.height = video.videoHeight;
   freezeCanvas.getContext('2d').drawImage(video, 0, 0);
@@ -320,9 +328,6 @@ async function captureCropped() {
   setScanStatus('Captured — reading crops...');
 
   try {
-    const idxRect = mapBoxToSource(indexBoxEl);
-    const scoreRect = mapBoxToSource(scoreBoxEl);
-
     const indexCanvas = cropFromFreeze(idxRect.left, idxRect.top, idxRect.right, idxRect.bottom);
     const scoreCanvas = cropFromFreeze(scoreRect.left, scoreRect.top, scoreRect.right, scoreRect.bottom);
 
