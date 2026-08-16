@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Exam Mark Capture (offline, free, real-time)</title>
+<title>Exam Mark Capture (Auto-detect)</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
@@ -21,8 +21,6 @@
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
   .badge { display: inline-block; background: #e4efe0; color: var(--success); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px; margin-bottom: 12px; }
   .badge.scan { background: #dbe8f5; color: var(--accent); }
-  .badge.low { background: #f5e6d8; color: #8a4b12; }
-  .badge.saved { background: #e4efe0; color: var(--success); }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   input[type="text"], input[type="number"] { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; margin-bottom: 12px; }
   button.secondary { width: 100%; padding: 12px; background: transparent; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; cursor: pointer; color: var(--text); margin-top: 8px; }
@@ -43,49 +41,36 @@
   .hidden { display: none; }
   .detected-crop { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: #fff; }
   .crop-label { font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
-  .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 4px 0 10px; }
-  .toggle-row input { margin: 0; }
-  .crop-pair { display: flex; gap: 8px; }
-  .crop-pair > div { flex: 1; }
 </style>
 </head>
 <body>
 
-  <h1>Exam mark capture — offline, real-time</h1>
-  <p class="sub">100% on-device, no internet, no cost. Hold the whole page in view — the topmost text on the page is read as the index number, the next block below it as the score — and confident reads are written to your sheet instantly.</p>
+  <h1>Exam mark capture — instant capture</h1>
+  <p class="sub">Frame the booklet cover, tap Capture, verify, and it saves to your sheet instantly.</p>
 
   <div class="card" id="scanCard">
-    <div class="badge scan">Live scanning — fully offline</div>
+    <div class="badge scan">Live scanning</div>
     <button class="start" id="startBtn" onclick="startScanning()">▶ Start scanning</button>
     <div class="video-wrap hidden" id="videoWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="freezeCanvas" class="hidden"></canvas>
-      <div class="scan-status" id="scanStatus">Point camera at the full page...</div>
+      <div class="scan-status" id="scanStatus">Frame the whole cover, then tap Capture</div>
     </div>
+    <button class="start hidden" id="captureBtn" onclick="captureAndRead()" style="margin-top:10px;">📸 Capture</button>
     <button class="secondary hidden" id="stopBtn" onclick="stopScanning()">Stop scanning</button>
-    <div class="toggle-row">
-      <input type="checkbox" id="autoSaveToggle">
-      <label for="autoSaveToggle" style="margin:0;">Write to sheet instantly when confidence is high (uncheck to always review first)</label>
-    </div>
   </div>
 
   <div class="card hidden" id="resultCard">
-    <div class="badge" id="resultBadge">Verify before saving</div>
+    <div class="badge">Verify before saving</div>
     <div id="confidenceFlag"></div>
 
-    <div class="crop-pair">
-      <div>
-        <div class="crop-label">Read as index number (top):</div>
-        <canvas id="idxCropView" class="detected-crop"></canvas>
-      </div>
-      <div>
-        <div class="crop-label">Read as score (below):</div>
-        <canvas id="scoreCropView" class="detected-crop"></canvas>
-      </div>
-    </div>
+    <div class="crop-label">Detected as index number:</div>
+    <canvas id="indexCropView" class="detected-crop"></canvas>
     <label for="indexNumber">Index number</label>
     <input type="text" id="indexNumber" placeholder="e.g. 1234/2026">
 
+    <div class="crop-label">Detected as score:</div>
+    <canvas id="scoreCropView" class="detected-crop"></canvas>
     <label for="score">Score</label>
     <input type="number" id="score">
 
@@ -102,9 +87,6 @@
       <input type="text" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec">
       <button class="secondary" onclick="saveSettings()">Save settings</button>
       <div id="settingsStatus" class="status"></div>
-      <label for="maxScore" style="margin-top:12px;">Max possible score (for validation)</label>
-      <input type="number" id="maxScore" min="1">
-      <p style="font-size:12px;color:var(--muted);margin-top:6px;">The Apps Script URL is only used to append rows to your sheet — no API key, no per-scan cost. All reading happens on-device.</p>
     </div>
   </details>
 
@@ -115,42 +97,21 @@
 
 <script>
 const S = { get: k => localStorage.getItem(k) || '', set: (k, v) => localStorage.setItem(k, v) };
-
 document.getElementById('scriptUrl').value = S.get('sheet_url');
-
-const autoSaveEl = document.getElementById('autoSaveToggle');
-const storedAutoSave = localStorage.getItem('auto_save');
-autoSaveEl.checked = storedAutoSave === null ? true : storedAutoSave === '1'; // real-time by default
-if (storedAutoSave === null) S.set('auto_save', '1');
-autoSaveEl.addEventListener('change', e => S.set('auto_save', e.target.checked ? '1' : '0'));
-
 function saveSettings() {
   S.set('sheet_url', document.getElementById('scriptUrl').value.trim());
   const el = document.getElementById('settingsStatus');
   el.textContent = 'Settings saved.'; el.className = 'status ok';
 }
 
-const maxScoreEl = document.getElementById('maxScore');
-maxScoreEl.value = S.get('max_score') || '100';
-maxScoreEl.addEventListener('input', () => S.set('max_score', maxScoreEl.value));
-
 let stream = null;
 let video, freezeCanvas;
-let loopHandle = null;
-let stableCount = 0;
-let armed = true;
-let lastFrameData = null;
-const STABLE_FRAMES_NEEDED = 6;   // ~6 x 250ms ≈ 1.5s held steady
-const DIFF_THRESHOLD = 10;        // motion sensitivity (lower = stricter "steady" requirement)
-const CHANGE_THRESHOLD = 30;      // "page swapped" sensitivity to re-arm
-const SAMPLE_MS = 250;
-const FRAMES_TO_SAMPLE = 3;       // consensus frames per capture
-const FRAME_GAP_MS = 120;
 
 async function startScanning() {
   document.getElementById('startBtn').classList.add('hidden');
   document.getElementById('videoWrap').classList.remove('hidden');
   document.getElementById('stopBtn').classList.remove('hidden');
+  document.getElementById('captureBtn').classList.remove('hidden');
   document.getElementById('resultCard').classList.add('hidden');
 
   video = document.getElementById('video');
@@ -158,124 +119,60 @@ async function startScanning() {
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      }
     });
     video.srcObject = stream;
     await video.play();
-    armed = true;
-    stableCount = 0;
-    lastFrameData = null;
-    setScanStatus('Point camera at the full page...');
-    loopHandle = setInterval(analyzeFrame, SAMPLE_MS);
+    setScanStatus('Frame the booklet cover, then tap Capture.');
   } catch (err) {
     setScanStatus('Camera access failed: ' + err.message);
   }
 }
 
 function stopScanning() {
-  if (loopHandle) clearInterval(loopHandle);
   if (stream) stream.getTracks().forEach(t => t.stop());
   document.getElementById('startBtn').classList.remove('hidden');
   document.getElementById('videoWrap').classList.add('hidden');
   document.getElementById('stopBtn').classList.add('hidden');
+  document.getElementById('captureBtn').classList.add('hidden');
 }
 
 function setScanStatus(text) {
   document.getElementById('scanStatus').textContent = text;
 }
 
-const sampleCanvas = document.createElement('canvas');
-sampleCanvas.width = 120; sampleCanvas.height = 90;
-const sampleCtx = sampleCanvas.getContext('2d');
-
-function analyzeFrame() {
-  if (!video || video.readyState < 2) return;
-  sampleCtx.drawImage(video, 0, 0, sampleCanvas.width, sampleCanvas.height);
-  const frame = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
-
-  if (lastFrameData) {
-    let diffSum = 0;
-    for (let i = 0; i < frame.length; i += 4) diffSum += Math.abs(frame[i] - lastFrameData[i]);
-    const avgDiff = diffSum / (frame.length / 4);
-
-    if (!armed) {
-      if (avgDiff > CHANGE_THRESHOLD) {
-        armed = true;
-        stableCount = 0;
-        setScanStatus('Ready — hold next page steady...');
-      }
-    } else if (avgDiff < DIFF_THRESHOLD) {
-      stableCount++;
-      setScanStatus(`Holding steady... (${stableCount}/${STABLE_FRAMES_NEEDED})`);
-      if (stableCount >= STABLE_FRAMES_NEEDED) captureAndRead();
-    } else {
-      stableCount = 0;
-      setScanStatus('Point camera at the full page...');
-    }
-  }
-  lastFrameData = frame;
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 async function captureAndRead() {
-  armed = false;
-  stableCount = 0;
-  clearInterval(loopHandle);
-  setScanStatus('Captured — reading on-device...');
+  setScanStatus('Captured — reading...');
 
-  const frames = [];
-  for (let i = 0; i < FRAMES_TO_SAMPLE; i++) {
-    const c = document.createElement('canvas');
-    c.width = video.videoWidth; c.height = video.videoHeight;
-    c.getContext('2d').drawImage(video, 0, 0);
-    frames.push(c);
-    if (i < FRAMES_TO_SAMPLE - 1) await sleep(FRAME_GAP_MS);
-  }
-
-  freezeCanvas.width = frames[0].width;
-  freezeCanvas.height = frames[0].height;
-  freezeCanvas.getContext('2d').drawImage(frames[0], 0, 0);
+  freezeCanvas.width = video.videoWidth;
+  freezeCanvas.height = video.videoHeight;
+  freezeCanvas.getContext('2d').drawImage(video, 0, 0);
   freezeCanvas.classList.remove('hidden');
 
-  await readAndShow(frames);
-  loopHandle = setInterval(analyzeFrame, SAMPLE_MS);
+  await readAndShow();
 }
 
-// ---- Otsu adaptive thresholding — more robust to lighting than a fixed cutoff ----
-function otsuBinarize(sourceCanvas) {
+// ---- Content-band detection: find rows of dense dark pixels (handwritten/printed content) ----
+function binarizedCopy(sourceCanvas) {
   const c = document.createElement('canvas');
   c.width = sourceCanvas.width; c.height = sourceCanvas.height;
   const ctx = c.getContext('2d');
   ctx.drawImage(sourceCanvas, 0, 0);
   const imgData = ctx.getImageData(0, 0, c.width, c.height);
   const d = imgData.data;
-  const n = d.length / 4;
-  const gray = new Uint8ClampedArray(n);
-  const hist = new Array(256).fill(0);
-  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-    const g = Math.round(0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]);
-    gray[j] = g; hist[g]++;
-  }
-  let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
-  let sumB = 0, wB = 0, wF = 0, maxVar = -1, threshold = 150;
-  for (let t = 0; t < 256; t++) {
-    wB += hist[t]; if (wB === 0) continue;
-    wF = n - wB; if (wF === 0) break;
-    sumB += t * hist[t];
-    const mB = sumB / wB, mF = (sum - sumB) / wF;
-    const varBetween = wB * wF * (mB - mF) * (mB - mF);
-    if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
-  }
-  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-    const v = gray[j] < threshold ? 0 : 255;
-    d[i] = d[i + 1] = d[i + 2] = v;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.3*d[i] + 0.59*d[i+1] + 0.11*d[i+2];
+    const v = gray < 150 ? 0 : 255;
+    d[i] = d[i+1] = d[i+2] = v;
   }
   ctx.putImageData(imgData, 0, 0);
   return c;
 }
 
-// ---- Auto-detect content bands on the whole page: topmost = index number, next = score ----
 function findContentBands(binCanvas) {
   const w = binCanvas.width, h = binCanvas.height;
   const data = binCanvas.getContext('2d').getImageData(0, 0, w, h).data;
@@ -283,14 +180,14 @@ function findContentBands(binCanvas) {
   for (let y = 0; y < h; y++) {
     let count = 0;
     for (let x = 0; x < w; x++) {
-      if (data[(y * w + x) * 4] < 128) count++;
+      if (data[(y*w + x)*4] < 128) count++;
     }
     rowDark[y] = count;
   }
 
-  const rowThreshold = w * 0.04;
-  const minGapRows = Math.max(6, Math.floor(h * 0.012));
-  const minBandHeight = Math.max(10, Math.floor(h * 0.018));
+  const rowThreshold = w * 0.04;         // row must be ≥4% dark to count as "content"
+  const minGapRows = Math.max(6, Math.floor(h * 0.012));   // whitespace needed to separate bands
+  const minBandHeight = Math.max(10, Math.floor(h * 0.018)); // filters out thin lines/borders
 
   const bands = [];
   let inBand = false, start = 0, gap = 0;
@@ -321,30 +218,33 @@ function tightenHorizontal(binCanvas, top, bottom) {
   let left = w, right = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (data[(y * w + x) * 4] < 128) {
+      if (data[(y*w + x)*4] < 128) {
         if (x < left) left = x;
         if (x > right) right = x;
       }
     }
   }
-  if (left > right) return { left: 0, right: w };
+  if (left > right) return { left: 0, right: w }; // fallback: no content found, use full width
   const pad = Math.round(w * 0.01);
   return { left: Math.max(0, left - pad), right: Math.min(w, right + pad) };
 }
 
-function cropRegion(sourceCanvas, left, top, w, h) {
-  const scale = h < 90 ? 3 : 2;
-  const c = document.createElement('canvas');
-  c.width = Math.max(4, w) * scale; c.height = Math.max(4, h) * scale;
-  const ctx = c.getContext('2d');
+function cropFromFreeze(left, top, right, bottom) {
+  const canvas = document.createElement('canvas');
+  const sw = right - left, sh = bottom - top;
+  const scale = sh < 60 ? 3 : 1.5; // upscale small crops for better OCR
+  canvas.width = sw * scale; canvas.height = sh * scale;
+  const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(sourceCanvas, left, top, w, h, 0, 0, c.width, c.height);
-  return c;
+  ctx.drawImage(freezeCanvas, left, top, sw, sh, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 let workerPromise = null;
 async function getWorker() {
-  if (!workerPromise) workerPromise = (async () => await Tesseract.createWorker('eng'))();
+  if (!workerPromise) {
+    workerPromise = (async () => await Tesseract.createWorker('eng'))();
+  }
   return workerPromise;
 }
 async function ocrLine(canvas, whitelist) {
@@ -354,118 +254,57 @@ async function ocrLine(canvas, whitelist) {
   return { text: (data.text || '').trim(), confidence: data.confidence || 0 };
 }
 
-function modeOf(arr) {
-  const counts = {};
-  let best = '', bestCount = 0;
-  for (const v of arr) {
-    if (!v) continue;
-    counts[v] = (counts[v] || 0) + 1;
-    if (counts[v] > bestCount) { bestCount = counts[v]; best = v; }
-  }
-  return best;
-}
-function agreementCount(arr, value) { return arr.filter(v => v === value).length; }
+let lastReading = null;
 
-async function readMultiFrame(frames) {
-  const idxReadings = [], scoreReadings = [];
-  let idxConfSum = 0, scoreConfSum = 0, framesWithTwoBands = 0;
-  let lastIdxCrop = null, lastScoreCrop = null;
-
-  for (const frame of frames) {
-    const bin = otsuBinarize(frame);
+async function readAndShow() {
+  try {
+    const bin = binarizedCopy(freezeCanvas);
     const bands = findContentBands(bin);
 
     if (bands.length < 2) {
-      idxReadings.push(''); scoreReadings.push('');
-      continue;
+      setScanStatus('Could not find two content areas — try again with the full cover visible and well lit.');
+      document.getElementById('resultCard').classList.add('hidden');
+      return;
     }
-    framesWithTwoBands++;
 
     const indexBand = bands[0];
     const scoreBand = bands[1];
+
     const idxH = tightenHorizontal(bin, indexBand.top, indexBand.bottom);
     const scoreH = tightenHorizontal(bin, scoreBand.top, scoreBand.bottom);
 
-    const idxCrop = cropRegion(frame, idxH.left, indexBand.top, idxH.right - idxH.left, indexBand.bottom - indexBand.top);
-    const scoreCrop = cropRegion(frame, scoreH.left, scoreBand.top, scoreH.right - scoreH.left, scoreBand.bottom - scoreBand.top);
-    lastIdxCrop = idxCrop; lastScoreCrop = scoreCrop;
+    const indexCanvas = cropFromFreeze(idxH.left, indexBand.top, idxH.right, indexBand.bottom);
+    const scoreCanvas = cropFromFreeze(scoreH.left, scoreBand.top, scoreH.right, scoreBand.bottom);
 
-    const idxR = await ocrLine(idxCrop, '0123456789/');
-    const scoreR = await ocrLine(scoreCrop, '0123456789');
+    // show what was detected, so the human verifier can see exactly what was read
+    drawToView('indexCropView', indexCanvas);
+    drawToView('scoreCropView', scoreCanvas);
 
-    idxReadings.push(idxR.text.replace(/[^0-9/]/g, ''));
-    scoreReadings.push(scoreR.text.replace(/\D/g, ''));
-    idxConfSum += idxR.confidence;
-    scoreConfSum += scoreR.confidence;
-  }
+    const indexResult = await ocrLine(indexCanvas, '0123456789/');
+    const scoreResult = await ocrLine(scoreCanvas, '0123456789');
 
-  const indexNumber = modeOf(idxReadings);
-  const score = modeOf(scoreReadings);
-  const idxAgree = agreementCount(idxReadings, indexNumber);
-  const scoreAgree = agreementCount(scoreReadings, score);
-  const avgEngineConf = framesWithTwoBands ? (idxConfSum + scoreConfSum) / (2 * framesWithTwoBands) : 0;
+    const indexNumber = indexResult.text.replace(/[^0-9/]/g, '');
+    const score = scoreResult.text.replace(/\D/g, '');
+    const avgConf = (indexResult.confidence + scoreResult.confidence) / 2;
 
-  return {
-    indexNumber, score, idxAgree, scoreAgree, totalFrames: frames.length,
-    framesWithTwoBands, avgEngineConf, idxCrop: lastIdxCrop, scoreCrop: lastScoreCrop
-  };
-}
+    let confLabel;
+    if (avgConf >= 85 && indexNumber && score) confLabel = `High (${avgConf.toFixed(0)}%)`;
+    else if (avgConf >= 65) confLabel = `Medium (${avgConf.toFixed(0)}%)`;
+    else confLabel = `Low (${avgConf.toFixed(0)}%)`;
 
-function computeConfidence(r) {
-  const maxScore = parseFloat(S.get('max_score')) || null;
-  const issues = [];
-  if (r.framesWithTwoBands === 0) issues.push('could not find two text regions on the page — try better framing/lighting');
-  if (!r.indexNumber) issues.push('index number not read');
-  if (!r.score) issues.push('score not read');
-  if (r.score && maxScore && Number(r.score) > maxScore) issues.push(`score exceeds max of ${maxScore}`);
+    lastReading = { confLabel };
 
-  const fullAgree = r.idxAgree === r.totalFrames && r.scoreAgree === r.totalFrames;
-  const majorityAgree = r.idxAgree >= Math.ceil(r.totalFrames / 2) && r.scoreAgree >= Math.ceil(r.totalFrames / 2);
-
-  let confidence;
-  if (issues.length === 0 && fullAgree && r.avgEngineConf >= 80) confidence = 'high';
-  else if (issues.length === 0 && majorityAgree && r.avgEngineConf >= 55) confidence = 'medium';
-  else confidence = 'low';
-
-  let notes = issues.length
-    ? issues.join('; ')
-    : (fullAgree ? 'All 3 frames agreed.' : 'Frames disagreed on at least one field — please double check.');
-
-  return { confidence, notes };
-}
-
-let lastReading = null;
-
-async function readAndShow(frames) {
-  try {
-    const r = await readMultiFrame(frames);
-    const { confidence, notes } = computeConfidence(r);
-
-    if (r.idxCrop) drawToView('idxCropView', r.idxCrop);
-    if (r.scoreCrop) drawToView('scoreCropView', r.scoreCrop);
-
-    lastReading = { confLabel: confidence };
-
-    document.getElementById('indexNumber').value = r.indexNumber;
-    document.getElementById('score').value = r.score;
-    document.getElementById('confidenceText').textContent =
-      confidence.charAt(0).toUpperCase() + confidence.slice(1) + ` (${r.idxAgree}/${r.totalFrames} & ${r.scoreAgree}/${r.totalFrames} frames agreed, ${r.avgEngineConf.toFixed(0)}% OCR conf)`;
-
-    const badge = document.getElementById('resultBadge');
-    const needsReview = confidence !== 'high';
-    badge.textContent = needsReview ? 'Low/medium confidence — verify carefully' : 'High confidence';
-    badge.className = 'badge' + (needsReview ? ' low' : '');
+    document.getElementById('indexNumber').value = indexNumber;
+    document.getElementById('score').value = score;
+    document.getElementById('confidenceText').textContent = confLabel;
 
     const flagEl = document.getElementById('confidenceFlag');
-    flagEl.innerHTML = needsReview ? `<div class="flag">⚠ ${notes}</div>` : '';
+    flagEl.innerHTML = (confLabel.startsWith('Low') || !indexNumber || !score)
+      ? '<div class="flag">⚠ Low confidence or a field came back empty — please check the detected crops below and correct as needed.</div>'
+      : '';
 
     document.getElementById('resultCard').classList.remove('hidden');
-    setScanStatus('Ready — hold next page steady...');
-
-    const autoSave = document.getElementById('autoSaveToggle').checked;
-    if (autoSave && !needsReview) {
-      await saveToSheet(true);
-    }
+    setScanStatus('Ready for next booklet — tap Capture when ready.');
   } catch (err) {
     setScanStatus('Reading failed: ' + err.message);
   }
@@ -473,82 +312,45 @@ async function readAndShow(frames) {
 
 function drawToView(canvasId, sourceCanvas) {
   const view = document.getElementById(canvasId);
-  const maxW = 220;
-  const scale = Math.min(1, maxW / sourceCanvas.width);
-  view.width = sourceCanvas.width * scale;
-  view.height = sourceCanvas.height * scale;
-  view.getContext('2d').drawImage(sourceCanvas, 0, 0, view.width, view.height);
+  view.width = sourceCanvas.width;
+  view.height = sourceCanvas.height;
+  view.getContext('2d').drawImage(sourceCanvas, 0, 0);
 }
 
 function discardAndRescan() {
   document.getElementById('resultCard').classList.add('hidden');
   freezeCanvas.classList.add('hidden');
-  armed = true;
+  setScanStatus('Frame the booklet cover, then tap Capture.');
 }
 
-// ---- Save to sheet, with an offline queue that flushes once back online ----
-function queuePendingSave(payload) {
-  const q = JSON.parse(localStorage.getItem('pending_saves') || '[]');
-  q.push(payload);
-  localStorage.setItem('pending_saves', JSON.stringify(q));
-}
-
-async function trySyncPendingSaves() {
-  const scriptUrl = S.get('sheet_url');
-  if (!scriptUrl) return;
-  let q = JSON.parse(localStorage.getItem('pending_saves') || '[]');
-  if (q.length === 0) return;
-  const remaining = [];
-  for (const payload of q) {
-    try {
-      await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
-    } catch (err) {
-      remaining.push(payload);
-    }
-  }
-  localStorage.setItem('pending_saves', JSON.stringify(remaining));
-  if (remaining.length < q.length) {
-    const statusEl = document.getElementById('saveStatus');
-    if (statusEl) { statusEl.textContent = `Synced ${q.length - remaining.length} queued submission(s).`; statusEl.className = 'status ok'; }
-  }
-}
-window.addEventListener('online', trySyncPendingSaves);
-trySyncPendingSaves();
-
-async function saveToSheet(fromAutoSave) {
+async function saveToSheet() {
   const scriptUrl = S.get('sheet_url');
   const indexNumber = document.getElementById('indexNumber').value.trim();
   const score = document.getElementById('score').value.trim();
   const confidence = lastReading ? lastReading.confLabel : '';
   const statusEl = document.getElementById('saveStatus');
 
-  if (!indexNumber || !score) {
-    if (!fromAutoSave) { statusEl.textContent = 'Enter both index number and score first.'; statusEl.className = 'status error'; }
-    return;
-  }
-  if (!scriptUrl) {
-    if (!fromAutoSave) { statusEl.textContent = 'Google Sheet connection not set (see Settings).'; statusEl.className = 'status error'; }
-    return;
-  }
+  if (!indexNumber || !score) { statusEl.textContent = 'Enter both index number and score first.'; statusEl.className = 'status error'; return; }
+  if (!scriptUrl) { statusEl.textContent = 'Google Sheet connection not set (see Settings).'; statusEl.className = 'status error'; return; }
 
   const saveBtn = document.getElementById('saveBtn');
   saveBtn.disabled = true;
   statusEl.textContent = 'Saving...'; statusEl.className = 'status';
 
-  const payload = { action: 'save', indexNumber, score, confidence, timestamp: new Date().toISOString() };
-
   try {
-    await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) });
+    await fetch(scriptUrl, {
+      method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ indexNumber, score, confidence, timestamp: new Date().toISOString() })
+    });
     statusEl.textContent = 'Saved.'; statusEl.className = 'status ok';
+    addToLog(indexNumber, score, confidence);
+    document.getElementById('resultCard').classList.add('hidden');
+    freezeCanvas.classList.add('hidden');
   } catch (err) {
-    queuePendingSave(payload);
-    statusEl.textContent = 'No connection — queued, will sync automatically when back online.'; statusEl.className = 'status';
+    statusEl.textContent = 'Save failed: ' + err.message; statusEl.className = 'status error';
+  } finally {
+    saveBtn.disabled = false;
   }
-
-  addToLog(indexNumber, score, confidence);
-  document.getElementById('resultCard').classList.add('hidden');
-  freezeCanvas.classList.add('hidden');
-  saveBtn.disabled = false;
 }
 
 function addToLog(indexNumber, score, confidence) {
