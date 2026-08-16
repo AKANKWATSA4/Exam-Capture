@@ -14,12 +14,12 @@
   body { touch-action: auto; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg); color: var(--text); margin: 0; padding: 16px;
+    background: var(--bg); color: var(--text); margin: 0; padding: 10px;
     max-width: 480px; margin: 0 auto;
   }
-  h1 { font-size: 18px; font-weight: 600; margin: 8px 0 4px; }
-  p.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  h1 { font-size: 16px; font-weight: 600; margin: 4px 0 2px; }
+  p.sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
   .badge { display: inline-block; background: #e4efe0; color: var(--success); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px; margin-bottom: 12px; }
   .badge.scan { background: #dbe8f5; color: var(--accent); }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
@@ -28,8 +28,8 @@
   button.save { width: 100%; padding: 14px; background: var(--success); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.start { width: 100%; padding: 16px; background: var(--accent); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .video-wrap { position: relative; width: 100%; border-radius: 10px; overflow: hidden; background: #000; user-select: none; }
-  video, #freezeCanvas { width: 100%; display: block; pointer-events: none; }
+  .video-wrap { position: relative; width: 100%; aspect-ratio: 3 / 4; max-height: 42vh; border-radius: 10px; overflow: hidden; background: #000; user-select: none; }
+  video, #freezeCanvas { width: 100%; height: 100%; display: block; pointer-events: none; object-fit: fill; }
   #freezeCanvas { position: absolute; top: 0; left: 0; }
   .scan-status { text-align: center; font-size: 12px; color: white; background: rgba(0,0,0,0.55); position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 6px; border-radius: 8px; pointer-events: none; }
   .crop-box {
