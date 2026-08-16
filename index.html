@@ -117,7 +117,7 @@
     <div class="crop-label">Detected as score:</div>
     <canvas id="scoreCropView" class="detected-crop"></canvas>
     <label for="score">Score</label>
-    <input type="number" id="score">
+    <input type="text" inputmode="numeric" id="score">
 
     <label style="margin-top:4px;">Confidence: <span id="confidenceText" style="color:var(--text);font-weight:600;"></span></label>
     <button class="save" id="saveBtn" onclick="saveToSheet()">Save & scan next</button>
@@ -300,7 +300,10 @@ async function getWorker() {
 }
 async function ocrLine(canvas, whitelist) {
   const worker = await getWorker();
-  await worker.setParameters({ tessedit_char_whitelist: whitelist, tessedit_pageseg_mode: '7' });
+  const params = { tessedit_pageseg_mode: '7' };
+  if (whitelist) params.tessedit_char_whitelist = whitelist;
+  else params.tessedit_char_whitelist = ''; // no restriction — read whatever characters appear
+  await worker.setParameters(params);
   const { data } = await worker.recognize(canvas);
   return { text: (data.text || '').trim(), confidence: data.confidence || 0 };
 }
@@ -327,11 +330,11 @@ async function captureCropped() {
     drawToView('indexCropView', indexCanvas);
     drawToView('scoreCropView', scoreCanvas);
 
-    const indexResult = await ocrLine(indexCanvas, '0123456789/');
-    const scoreResult = await ocrLine(scoreCanvas, '0123456789');
+    const indexResult = await ocrLine(indexCanvas);
+    const scoreResult = await ocrLine(scoreCanvas);
 
-    const indexNumber = indexResult.text.replace(/[^0-9/]/g, '');
-    const score = scoreResult.text.replace(/\D/g, '');
+    const indexNumber = indexResult.text;
+    const score = scoreResult.text;
     const avgConf = (indexResult.confidence + scoreResult.confidence) / 2;
 
     let confLabel;
