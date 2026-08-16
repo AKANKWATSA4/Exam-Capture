@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Exam Mark Capture (Auto-scan)</title>
+<title>Exam Mark Capture (Auto-detect)</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
@@ -30,9 +30,6 @@
   .video-wrap { position: relative; width: 100%; border-radius: 10px; overflow: hidden; background: #000; }
   video, #freezeCanvas { width: 100%; display: block; }
   #freezeCanvas { position: absolute; top: 0; left: 0; }
-  .guide { position: absolute; border: 2px dashed rgba(255,255,255,0.85); pointer-events: none; border-radius: 4px; }
-  .guide.armed { border-color: #3ddc63; }
-  .guide-label { position: absolute; top: -20px; left: 0; font-size: 11px; color: white; background: rgba(0,0,0,0.55); padding: 2px 6px; border-radius: 4px; }
   .scan-status { text-align: center; font-size: 13px; color: white; background: rgba(0,0,0,0.55); position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 8px; border-radius: 8px; }
   .status { font-size: 13px; margin: 8px 0; min-height: 18px; }
   .status.error { color: var(--danger); }
@@ -42,35 +39,40 @@
   .log { font-size: 12px; color: var(--muted); }
   .log-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .hidden { display: none; }
+  .detected-crop { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: #fff; }
+  .crop-label { font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
 </style>
 </head>
 <body>
 
-  <h1>Exam mark capture — auto-scan</h1>
-  <p class="sub">Hold the booklet steady inside the guide. It captures and reads automatically.</p>
+  <h1>Exam mark capture — auto-detect</h1>
+  <p class="sub">Hold the whole booklet cover in view. It finds the index number and score on its own.</p>
 
-  <!-- LIVE SCAN VIEW -->
   <div class="card" id="scanCard">
     <div class="badge scan">Live scanning</div>
     <button class="start" id="startBtn" onclick="startScanning()">▶ Start scanning</button>
     <div class="video-wrap hidden" id="videoWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="freezeCanvas" class="hidden"></canvas>
-      <div class="guide" id="indexGuide"><span class="guide-label">Index number</span></div>
-      <div class="guide" id="scoreGuide"><span class="guide-label">Score</span></div>
       <div class="scan-status" id="scanStatus">Point camera at booklet cover...</div>
     </div>
     <button class="secondary hidden" id="stopBtn" onclick="stopScanning()">Stop scanning</button>
   </div>
 
-  <!-- RESULTS -->
   <div class="card hidden" id="resultCard">
     <div class="badge">Verify before saving</div>
     <div id="confidenceFlag"></div>
+
+    <div class="crop-label">Detected as index number:</div>
+    <canvas id="indexCropView" class="detected-crop"></canvas>
     <label for="indexNumber">Index number</label>
     <input type="text" id="indexNumber" placeholder="e.g. 1234/2026">
+
+    <div class="crop-label">Detected as score:</div>
+    <canvas id="scoreCropView" class="detected-crop"></canvas>
     <label for="score">Score</label>
     <input type="number" id="score">
+
     <label style="margin-top:4px;">Confidence: <span id="confidenceText" style="color:var(--text);font-weight:600;"></span></label>
     <button class="save" id="saveBtn" onclick="saveToSheet()">Save & scan next</button>
     <button class="secondary" onclick="discardAndRescan()">Discard, rescan this one</button>
@@ -101,38 +103,16 @@ function saveSettings() {
   el.textContent = 'Settings saved.'; el.className = 'status ok';
 }
 
-// ---- Fixed guide layout (matches the printed booklet cover template) ----
-// Percent coordinates: left, top, right, bottom, digit count
-const GUIDE = {
-  index: { left: 10, top: 18, right: 55, bottom: 28, digits: 6 },
-  score: { left: 10, top: 38, right: 35, bottom: 48, digits: 3 },
-};
-
 let stream = null;
 let video, freezeCanvas;
 let loopHandle = null;
 let stableCount = 0;
-let armed = true;           // only allow capture when armed (prevents recapturing same still page)
+let armed = true;
 let lastFrameData = null;
-const STABLE_FRAMES_NEEDED = 4;   // ~4 x 250ms ≈ 1s held steady
-const DIFF_THRESHOLD = 12;        // motion sensitivity
+const STABLE_FRAMES_NEEDED = 9;   // ~9 x 250ms ≈ 2.25s held steady — slower, more deliberate trigger
+const DIFF_THRESHOLD = 10;        // motion sensitivity (lower = stricter "steady" requirement)
 const CHANGE_THRESHOLD = 30;      // "page swapped" sensitivity to re-arm
 const SAMPLE_MS = 250;
-
-function positionGuides() {
-  const wrap = document.getElementById('videoWrap');
-  const w = wrap.clientWidth, h = wrap.clientHeight;
-  const idx = document.getElementById('indexGuide');
-  idx.style.left = (GUIDE.index.left/100*w) + 'px';
-  idx.style.top = (GUIDE.index.top/100*h) + 'px';
-  idx.style.width = ((GUIDE.index.right-GUIDE.index.left)/100*w) + 'px';
-  idx.style.height = ((GUIDE.index.bottom-GUIDE.index.top)/100*h) + 'px';
-  const sc = document.getElementById('scoreGuide');
-  sc.style.left = (GUIDE.score.left/100*w) + 'px';
-  sc.style.top = (GUIDE.score.top/100*h) + 'px';
-  sc.style.width = ((GUIDE.score.right-GUIDE.score.left)/100*w) + 'px';
-  sc.style.height = ((GUIDE.score.bottom-GUIDE.score.top)/100*h) + 'px';
-}
 
 async function startScanning() {
   document.getElementById('startBtn').classList.add('hidden');
@@ -147,15 +127,13 @@ async function startScanning() {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     video.srcObject = stream;
     await video.play();
-    positionGuides();
-    window.addEventListener('resize', positionGuides);
     armed = true;
     stableCount = 0;
     lastFrameData = null;
-    setScanStatus('Point camera at booklet cover...', false);
+    setScanStatus('Point camera at booklet cover...');
     loopHandle = setInterval(analyzeFrame, SAMPLE_MS);
   } catch (err) {
-    setScanStatus('Camera access failed: ' + err.message, false);
+    setScanStatus('Camera access failed: ' + err.message);
   }
 }
 
@@ -167,13 +145,10 @@ function stopScanning() {
   document.getElementById('stopBtn').classList.add('hidden');
 }
 
-function setScanStatus(text, isArmedVisual) {
+function setScanStatus(text) {
   document.getElementById('scanStatus').textContent = text;
-  document.getElementById('indexGuide').classList.toggle('armed', isArmedVisual);
-  document.getElementById('scoreGuide').classList.toggle('armed', isArmedVisual);
 }
 
-// small offscreen canvas for cheap motion analysis
 const sampleCanvas = document.createElement('canvas');
 sampleCanvas.width = 120; sampleCanvas.height = 90;
 const sampleCtx = sampleCanvas.getContext('2d');
@@ -185,27 +160,22 @@ function analyzeFrame() {
 
   if (lastFrameData) {
     let diffSum = 0;
-    for (let i = 0; i < frame.length; i += 4) {
-      diffSum += Math.abs(frame[i] - lastFrameData[i]);
-    }
+    for (let i = 0; i < frame.length; i += 4) diffSum += Math.abs(frame[i] - lastFrameData[i]);
     const avgDiff = diffSum / (frame.length / 4);
 
     if (!armed) {
-      // waiting for the booklet to be swapped/removed before re-arming
       if (avgDiff > CHANGE_THRESHOLD) {
         armed = true;
         stableCount = 0;
-        setScanStatus('Ready — hold next booklet steady...', false);
+        setScanStatus('Ready — hold next booklet steady...');
       }
     } else if (avgDiff < DIFF_THRESHOLD) {
       stableCount++;
-      setScanStatus(`Holding steady... (${stableCount}/${STABLE_FRAMES_NEEDED})`, true);
-      if (stableCount >= STABLE_FRAMES_NEEDED) {
-        captureAndRead();
-      }
+      setScanStatus(`Holding steady... (${stableCount}/${STABLE_FRAMES_NEEDED})`);
+      if (stableCount >= STABLE_FRAMES_NEEDED) captureAndRead();
     } else {
       stableCount = 0;
-      setScanStatus('Point camera at booklet cover...', false);
+      setScanStatus('Point camera at booklet cover...');
     }
   }
   lastFrameData = frame;
@@ -215,36 +185,24 @@ async function captureAndRead() {
   armed = false;
   stableCount = 0;
   clearInterval(loopHandle);
-  setScanStatus('Captured — reading...', false);
+  setScanStatus('Captured — analyzing layout...');
 
-  // freeze the current frame at full resolution
   freezeCanvas.width = video.videoWidth;
   freezeCanvas.height = video.videoHeight;
-  const ctx = freezeCanvas.getContext('2d');
-  ctx.drawImage(video, 0, 0);
+  freezeCanvas.getContext('2d').drawImage(video, 0, 0);
   freezeCanvas.classList.remove('hidden');
 
-  const fullImg = new Image();
-  fullImg.onload = async () => {
-    await readAndShow(fullImg);
-    loopHandle = setInterval(analyzeFrame, SAMPLE_MS); // resume watching for next booklet swap
-  };
-  fullImg.src = freezeCanvas.toDataURL('image/png');
+  await readAndShow();
+  loopHandle = setInterval(analyzeFrame, SAMPLE_MS);
 }
 
-function cropRegion(img, g) {
-  const canvas = document.createElement('canvas');
-  const sx = g.left/100 * img.naturalWidth;
-  const sy = g.top/100 * img.naturalHeight;
-  const sw = (g.right-g.left)/100 * img.naturalWidth;
-  const sh = (g.bottom-g.top)/100 * img.naturalHeight;
-  canvas.width = sw; canvas.height = sh;
-  canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-  return canvas;
-}
-function preprocess(canvas) {
-  const ctx = canvas.getContext('2d');
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+// ---- Content-band detection: find rows of dense dark pixels (handwritten/printed content) ----
+function binarizedCopy(sourceCanvas) {
+  const c = document.createElement('canvas');
+  c.width = sourceCanvas.width; c.height = sourceCanvas.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(sourceCanvas, 0, 0);
+  const imgData = ctx.getImageData(0, 0, c.width, c.height);
   const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
     const gray = 0.3*d[i] + 0.59*d[i+1] + 0.11*d[i+2];
@@ -252,78 +210,151 @@ function preprocess(canvas) {
     d[i] = d[i+1] = d[i+2] = v;
   }
   ctx.putImageData(imgData, 0, 0);
+  return c;
+}
+
+function findContentBands(binCanvas) {
+  const w = binCanvas.width, h = binCanvas.height;
+  const data = binCanvas.getContext('2d').getImageData(0, 0, w, h).data;
+  const rowDark = new Array(h).fill(0);
+  for (let y = 0; y < h; y++) {
+    let count = 0;
+    for (let x = 0; x < w; x++) {
+      if (data[(y*w + x)*4] < 128) count++;
+    }
+    rowDark[y] = count;
+  }
+
+  const rowThreshold = w * 0.04;         // row must be ≥4% dark to count as "content"
+  const minGapRows = Math.max(6, Math.floor(h * 0.012));   // whitespace needed to separate bands
+  const minBandHeight = Math.max(10, Math.floor(h * 0.018)); // filters out thin lines/borders
+
+  const bands = [];
+  let inBand = false, start = 0, gap = 0;
+  for (let y = 0; y < h; y++) {
+    if (rowDark[y] > rowThreshold) {
+      if (!inBand) { inBand = true; start = y; }
+      gap = 0;
+    } else if (inBand) {
+      gap++;
+      if (gap > minGapRows) {
+        const end = y - gap;
+        if (end - start >= minBandHeight) bands.push({ top: start, bottom: end });
+        inBand = false;
+      }
+    }
+  }
+  if (inBand) {
+    const end = h - 1;
+    if (end - start >= minBandHeight) bands.push({ top: start, bottom: end });
+  }
+  return bands;
+}
+
+function tightenHorizontal(binCanvas, top, bottom) {
+  const w = binCanvas.width;
+  const data = binCanvas.getContext('2d').getImageData(0, top, w, bottom - top).data;
+  const h = bottom - top;
+  let left = w, right = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y*w + x)*4] < 128) {
+        if (x < left) left = x;
+        if (x > right) right = x;
+      }
+    }
+  }
+  if (left > right) return { left: 0, right: w }; // fallback: no content found, use full width
+  const pad = Math.round(w * 0.01);
+  return { left: Math.max(0, left - pad), right: Math.min(w, right + pad) };
+}
+
+function cropFromFreeze(left, top, right, bottom) {
+  const canvas = document.createElement('canvas');
+  const sw = right - left, sh = bottom - top;
+  const scale = sh < 60 ? 3 : 1.5; // upscale small crops for better OCR
+  canvas.width = sw * scale; canvas.height = sh * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(freezeCanvas, left, top, sw, sh, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 
 let workerPromise = null;
 async function getWorker() {
   if (!workerPromise) {
-    workerPromise = (async () => {
-      const worker = await Tesseract.createWorker('eng');
-      await worker.setParameters({ tessedit_char_whitelist: '0123456789' });
-      return worker;
-    })();
+    workerPromise = (async () => await Tesseract.createWorker('eng'))();
   }
   return workerPromise;
 }
-async function ocrDigitBox(canvas) {
+async function ocrLine(canvas, whitelist) {
   const worker = await getWorker();
+  await worker.setParameters({ tessedit_char_whitelist: whitelist, tessedit_pageseg_mode: '7' });
   const { data } = await worker.recognize(canvas);
-  const text = (data.text || '').replace(/\D/g, '');
-  return { text: text.length ? text[0] : '', confidence: data.confidence || 0 };
-}
-async function readRow(g) {
-  const results = [];
-  const width = g.right - g.left;
-  for (let i = 0; i < g.digits; i++) {
-    const boxLeft = g.left + (width/g.digits)*i;
-    const boxRight = g.left + (width/g.digits)*(i+1);
-    let canvas = cropRegion({ naturalWidth: freezeCanvas.width, naturalHeight: freezeCanvas.height, __src: null }, { left: boxLeft, top: g.top, right: boxRight, bottom: g.bottom });
-    // draw directly from freezeCanvas for full-res crop
-    const ctx = canvas.getContext('2d');
-    const sx = boxLeft/100 * freezeCanvas.width, sy = g.top/100 * freezeCanvas.height;
-    const sw = (boxRight-boxLeft)/100 * freezeCanvas.width, sh = (g.bottom-g.top)/100 * freezeCanvas.height;
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(freezeCanvas, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-    preprocess(canvas);
-    results.push(await ocrDigitBox(canvas));
-  }
-  return results;
+  return { text: (data.text || '').trim(), confidence: data.confidence || 0 };
 }
 
 let lastReading = null;
 
 async function readAndShow() {
   try {
-    const indexDigits = await readRow(GUIDE.index);
-    const scoreDigits = await readRow(GUIDE.score);
+    const bin = binarizedCopy(freezeCanvas);
+    const bands = findContentBands(bin);
 
-    const indexNumber = indexDigits.map(d => d.text || '?').join('');
-    const score = scoreDigits.map(d => d.text || '?').join('');
-    const allConf = [...indexDigits, ...scoreDigits].map(d => d.confidence);
-    const avgConf = allConf.reduce((a,b) => a+b, 0) / (allConf.length || 1);
+    if (bands.length < 2) {
+      setScanStatus('Could not find two content areas — try again with the full cover visible and well lit.');
+      document.getElementById('resultCard').classList.add('hidden');
+      return;
+    }
+
+    const indexBand = bands[0];
+    const scoreBand = bands[1];
+
+    const idxH = tightenHorizontal(bin, indexBand.top, indexBand.bottom);
+    const scoreH = tightenHorizontal(bin, scoreBand.top, scoreBand.bottom);
+
+    const indexCanvas = cropFromFreeze(idxH.left, indexBand.top, idxH.right, indexBand.bottom);
+    const scoreCanvas = cropFromFreeze(scoreH.left, scoreBand.top, scoreH.right, scoreBand.bottom);
+
+    // show what was detected, so the human verifier can see exactly what was read
+    drawToView('indexCropView', indexCanvas);
+    drawToView('scoreCropView', scoreCanvas);
+
+    const indexResult = await ocrLine(indexCanvas, '0123456789/');
+    const scoreResult = await ocrLine(scoreCanvas, '0123456789');
+
+    const indexNumber = indexResult.text.replace(/[^0-9/]/g, '');
+    const score = scoreResult.text.replace(/\D/g, '');
+    const avgConf = (indexResult.confidence + scoreResult.confidence) / 2;
 
     let confLabel;
-    if (avgConf >= 85 && !indexNumber.includes('?') && !score.includes('?')) confLabel = `High (${avgConf.toFixed(0)}%)`;
+    if (avgConf >= 85 && indexNumber && score) confLabel = `High (${avgConf.toFixed(0)}%)`;
     else if (avgConf >= 65) confLabel = `Medium (${avgConf.toFixed(0)}%)`;
     else confLabel = `Low (${avgConf.toFixed(0)}%)`;
 
-    lastReading = { indexNumber, score, confLabel };
+    lastReading = { confLabel };
 
-    document.getElementById('indexNumber').value = indexNumber.includes('?') ? '' : indexNumber;
-    document.getElementById('score').value = score.includes('?') ? '' : score;
+    document.getElementById('indexNumber').value = indexNumber;
+    document.getElementById('score').value = score;
     document.getElementById('confidenceText').textContent = confLabel;
 
     const flagEl = document.getElementById('confidenceFlag');
-    flagEl.innerHTML = confLabel.startsWith('Low') || indexNumber.includes('?') || score.includes('?')
-      ? '<div class="flag">⚠ Low confidence — please check carefully against the booklet before saving.</div>'
+    flagEl.innerHTML = (confLabel.startsWith('Low') || !indexNumber || !score)
+      ? '<div class="flag">⚠ Low confidence or a field came back empty — please check the detected crops below and correct as needed.</div>'
       : '';
 
     document.getElementById('resultCard').classList.remove('hidden');
-    setScanStatus('Ready — hold next booklet steady...', false);
+    setScanStatus('Ready — hold next booklet steady...');
   } catch (err) {
-    setScanStatus('Reading failed: ' + err.message, false);
+    setScanStatus('Reading failed: ' + err.message);
   }
+}
+
+function drawToView(canvasId, sourceCanvas) {
+  const view = document.getElementById(canvasId);
+  view.width = sourceCanvas.width;
+  view.height = sourceCanvas.height;
+  view.getContext('2d').drawImage(sourceCanvas, 0, 0);
 }
 
 function discardAndRescan() {
