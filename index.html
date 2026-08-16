@@ -322,14 +322,13 @@ async function cropAndCapture() {
   const idxRect = mapBoxToSource(indexBoxEl);
   const scoreRect = mapBoxToSource(scoreBoxEl);
 
-  // 2. CAPTURE — now freeze the frame those rectangles were measured against.
+  // 2. CAPTURE — grab the frame those rectangles were measured against into an
+  //    off-screen buffer for cropping. It's never shown — the live camera
+  //    (already running continuously) stays on screen the whole time, so
+  //    there's no freeze at all, not even during OCR.
   freezeCanvas.width = video.videoWidth;
   freezeCanvas.height = video.videoHeight;
   freezeCanvas.getContext('2d').drawImage(video, 0, 0);
-  freezeCanvas.classList.remove('hidden');
-  // freezeCanvas fully covers the video (see z-index stacking in CSS), so the
-  // stream keeps running in the background — no visible motion, and the next
-  // capture is instant since the camera never has to stop/restart.
   setScanStatus('Captured — reading crops...');
 
   try {
@@ -370,7 +369,6 @@ async function cropAndCapture() {
       : '';
 
     document.getElementById('resultCard').classList.remove('hidden');
-    freezeCanvas.classList.add('hidden'); // live feed was never stopped — show it again right away
     setScanStatus('Ready — adjust the boxes for the next booklet and capture again.');
   } catch (err) {
     setScanStatus('Reading failed: ' + err.message);
