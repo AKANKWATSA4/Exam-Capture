@@ -327,7 +327,9 @@ async function cropAndCapture() {
   freezeCanvas.height = video.videoHeight;
   freezeCanvas.getContext('2d').drawImage(video, 0, 0);
   freezeCanvas.classList.remove('hidden');
-  video.pause(); // stop the live feed itself so nothing can visibly move under the freeze
+  // freezeCanvas fully covers the video (see z-index stacking in CSS), so the
+  // stream keeps running in the background — no visible motion, and the next
+  // capture is instant since the camera never has to stop/restart.
   setScanStatus('Captured — reading crops...');
 
   try {
@@ -368,6 +370,7 @@ async function cropAndCapture() {
       : '';
 
     document.getElementById('resultCard').classList.remove('hidden');
+    freezeCanvas.classList.add('hidden'); // live feed was never stopped — show it again right away
     setScanStatus('Ready — adjust the boxes for the next booklet and capture again.');
   } catch (err) {
     setScanStatus('Reading failed: ' + err.message);
@@ -384,7 +387,6 @@ function drawToView(canvasId, sourceCanvas) {
 function discardAndRescan() {
   document.getElementById('resultCard').classList.add('hidden');
   freezeCanvas.classList.add('hidden');
-  video.play();
   setScanStatus('Position the boxes, then tap Capture.');
 }
 
@@ -411,7 +413,6 @@ async function saveToSheet() {
     addToLog(indexNumber, score, confidence);
     document.getElementById('resultCard').classList.add('hidden');
     freezeCanvas.classList.add('hidden');
-    video.play();
   } catch (err) {
     statusEl.textContent = 'Save failed: ' + err.message; statusEl.className = 'status error';
   } finally {
