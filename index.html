@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Exam Mark Capture</title>
+<title>Exam Mark Capture (Movable Crop Frames)</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
@@ -11,23 +11,20 @@
     --text: #2c2c2a; --muted: #5f5e5a; --danger: #a32d2d; --success: #3b6d11;
   }
   * { box-sizing: border-box; }
-  html {
-    overflow-y: scroll; /* always reserve space so the scrollbar is persistently visible */
-    scrollbar-gutter: stable;
-    scrollbar-width: auto; /* Firefox */
-    scrollbar-color: var(--accent) var(--border); /* Firefox */
-  }
-  html::-webkit-scrollbar { width: 12px; }
-  html::-webkit-scrollbar-track { background: var(--border); }
-  html::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 6px; border: 2px solid var(--border); }
+  html, body { overflow-y: scroll; height: 100%; }
+  /* Make the scrollbar a visible, persistent "slider" on the side */
+  html { scrollbar-width: auto; scrollbar-color: var(--accent) var(--bg); }
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 6px; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg); color: var(--text); margin: 0; padding: 16px;
+    background: var(--bg); color: var(--text); margin: 0; padding: 10px;
     max-width: 480px; margin: 0 auto;
   }
-  h1 { font-size: 18px; font-weight: 600; margin: 8px 0 4px; }
-  p.sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  h1 { font-size: 16px; font-weight: 600; margin: 4px 0 2px; }
+  p.sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
   .badge { display: inline-block; background: #e4efe0; color: var(--success); font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px; margin-bottom: 12px; }
   .badge.scan { background: #dbe8f5; color: var(--accent); }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
@@ -36,11 +33,24 @@
   button.save { width: 100%; padding: 14px; background: var(--success); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.start { width: 100%; padding: 16px; background: var(--accent); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .video-wrap { position: relative; width: 100%; max-height: 45vh; border-radius: 10px; overflow: hidden; background: #000; }
-  video, #freezeCanvas { width: 100%; height: 100%; display: block; object-fit: cover; }
-  video { position: relative; z-index: 0; }
-  #freezeCanvas { position: absolute; top: 0; left: 0; z-index: 1; }
-  .scan-status { text-align: center; font-size: 13px; color: white; background: rgba(0,0,0,0.55); position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 8px; border-radius: 8px; z-index: 3; }
+  .video-wrap { position: relative; width: 100%; aspect-ratio: 3 / 4; max-height: 42vh; border-radius: 10px; overflow: hidden; background: #000; user-select: none; }
+  video, #freezeCanvas { width: 100%; height: 100%; display: block; pointer-events: none; object-fit: cover; }
+  #freezeCanvas { position: absolute; top: 0; left: 0; }
+  .scan-status { text-align: center; font-size: 12px; color: white; background: rgba(0,0,0,0.55); position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 6px; border-radius: 8px; pointer-events: none; }
+  .crop-box {
+    position: absolute; border: 2px solid #ff9500; background: rgba(255,149,0,0.12);
+    cursor: move; box-sizing: border-box;
+  }
+  .crop-box.score { border-color: #34c759; background: rgba(52,199,89,0.12); }
+  .crop-label {
+    position: absolute; top: -20px; left: 0; font-size: 11px; color: white;
+    background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; pointer-events: none;
+  }
+  .resize-handle {
+    position: absolute; right: -8px; bottom: -8px; width: 20px; height: 20px;
+    background: #ff9500; border: 2px solid white; border-radius: 50%; cursor: se-resize;
+  }
+  .crop-box.score .resize-handle { background: #34c759; }
   .status { font-size: 13px; margin: 8px 0; min-height: 18px; }
   .status.error { color: var(--danger); }
   .status.ok { color: var(--success); }
@@ -50,60 +60,33 @@
   .log-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .hidden { display: none; }
   .detected-crop { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: #fff; }
-  .crop-label { font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
-
-  /* Draggable/resizable crop-frame overlays on the live camera view.
-     touch-action: none is scoped to these elements only, so page scroll
-     is untouched everywhere else. */
-  .crop-box {
-    position: absolute;
-    z-index: 2;
-    border: 3px solid var(--frame-color);
-    background: color-mix(in srgb, var(--frame-color) 12%, transparent);
-    box-sizing: border-box;
-    touch-action: none;
-    cursor: move;
-    border-radius: 4px;
-  }
-  .crop-box .crop-frame-tag {
-    position: absolute; top: -22px; left: -3px;
-    font-size: 11px; font-weight: 600; color: #fff;
-    background: var(--frame-color); padding: 2px 7px; border-radius: 4px;
-    white-space: nowrap; pointer-events: none;
-  }
-  .crop-box .resize-handle {
-    position: absolute; right: -11px; bottom: -11px;
-    width: 22px; height: 22px; border-radius: 50%;
-    background: var(--frame-color); border: 3px solid #fff;
-    touch-action: none; cursor: nwse-resize;
-  }
-  #indexBox { --frame-color: #e8720c; left: 8%; top: 6%; width: 84%; height: 16%; }
-  #scoreBox { --frame-color: #2f9e44; left: 8%; top: 30%; width: 46%; height: 16%; }
-  button.capture { width: 100%; padding: 16px; background: var(--accent); color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+  .crop-preview-label { font-size: 11px; color: var(--muted); margin: 4px 0 2px; }
 </style>
 </head>
 <body>
 
   <h1>Exam mark capture</h1>
-  <p class="sub">Line the orange box up on the index number and the green box on the score, then tap Capture.</p>
+  <p class="sub">Drag boxes over the numbers, capture, then copy or edit each value. A companion Viewer page can show the same capture on a computer.</p>
 
   <div class="card" id="scanCard">
-    <div class="badge scan">Live camera</div>
+    <div class="badge scan">Live scanning</div>
     <button class="start" id="startBtn" onclick="startScanning()">▶ Start scanning</button>
     <div class="video-wrap hidden" id="videoWrap">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="freezeCanvas" class="hidden"></canvas>
-      <div class="crop-box" id="indexBox">
-        <div class="crop-frame-tag">Index #</div>
-        <div class="resize-handle"></div>
+
+      <div class="crop-box index" id="indexBox">
+        <div class="crop-label">Index number</div>
+        <div class="resize-handle" data-box="index"></div>
       </div>
-      <div class="crop-box" id="scoreBox">
-        <div class="crop-frame-tag">Score</div>
-        <div class="resize-handle"></div>
+      <div class="crop-box score" id="scoreBox">
+        <div class="crop-label">Score</div>
+        <div class="resize-handle" data-box="score"></div>
       </div>
-      <div class="scan-status" id="scanStatus">Position the boxes, then tap Capture.</div>
+
+      <div class="scan-status" id="scanStatus">Position the boxes, then tap Capture</div>
     </div>
-    <button class="capture hidden" id="captureBtn" onclick="cropAndCapture()">✂️ Crop & Capture</button>
+    <button class="start hidden" id="captureBtn" onclick="captureAndRead()" style="margin-top:10px;">📸 Capture</button>
     <button class="secondary hidden" id="stopBtn" onclick="stopScanning()">Stop scanning</button>
   </div>
 
@@ -111,19 +94,26 @@
     <div class="badge">Verify before saving</div>
     <div id="confidenceFlag"></div>
 
-    <div class="crop-label">Detected as index number:</div>
+    <div class="crop-preview-label">First image — index number:</div>
     <canvas id="indexCropView" class="detected-crop"></canvas>
     <label for="indexNumber">Index number</label>
-    <input type="text" id="indexNumber" placeholder="e.g. 1234/2026">
+    <div style="display:flex; gap:8px;">
+      <input type="text" id="indexNumber" placeholder="e.g. 1234/2026" style="flex:1;">
+      <button class="secondary" style="width:auto; padding:10px 14px; margin-top:0;" onclick="copyField('indexNumber')">📋 Copy</button>
+    </div>
 
-    <div class="crop-label">Detected as score:</div>
+    <div class="crop-preview-label">Second image — score:</div>
     <canvas id="scoreCropView" class="detected-crop"></canvas>
     <label for="score">Score</label>
-    <input type="text" inputmode="numeric" id="score">
+    <div style="display:flex; gap:8px;">
+      <input type="number" id="score" style="flex:1;">
+      <button class="secondary" style="width:auto; padding:10px 14px; margin-top:0;" onclick="copyField('score')">📋 Copy</button>
+    </div>
 
     <label style="margin-top:4px;">Confidence: <span id="confidenceText" style="color:var(--text);font-weight:600;"></span></label>
+    <p style="font-size:12px;color:var(--muted);margin:4px 0 0;">Tip: tapping Copy marks a field confirmed. Once both are confirmed, it saves automatically.</p>
     <button class="save" id="saveBtn" onclick="saveToSheet()">Save & scan next</button>
-    <button class="secondary" onclick="discardAndRescan()">Discard, rescan this one</button>
+    <button class="secondary" onclick="discardAndRescan()">Discard, adjust & rescan</button>
     <div id="saveStatus" class="status"></div>
   </div>
 
@@ -133,6 +123,7 @@
       <label for="scriptUrl">Google Apps Script web app URL</label>
       <input type="text" id="scriptUrl" placeholder="https://script.google.com/macros/s/.../exec">
       <button class="secondary" onclick="saveSettings()">Save settings</button>
+      <button class="secondary" onclick="resetBoxPositions()">Reset box positions to default</button>
       <div id="settingsStatus" class="status"></div>
     </div>
   </details>
@@ -152,7 +143,96 @@ function saveSettings() {
 }
 
 let stream = null;
-let video, freezeCanvas;
+let video, freezeCanvas, videoWrap;
+
+// ---- Crop box positions, stored as percentages of the video container ----
+const DEFAULT_BOXES = {
+  index: { left: 8,  top: 16, width: 45, height: 10 },
+  score: { left: 8,  top: 34, width: 25, height: 10 },
+};
+let boxes = loadBoxes();
+
+function loadBoxes() {
+  const saved = JSON.parse(localStorage.getItem('crop_boxes') || 'null');
+  return saved || JSON.parse(JSON.stringify(DEFAULT_BOXES));
+}
+function saveBoxes() {
+  localStorage.setItem('crop_boxes', JSON.stringify(boxes));
+}
+function resetBoxPositions() {
+  boxes = JSON.parse(JSON.stringify(DEFAULT_BOXES));
+  saveBoxes();
+  renderBoxes();
+  const el = document.getElementById('settingsStatus');
+  el.textContent = 'Box positions reset.'; el.className = 'status ok';
+}
+
+function renderBoxes() {
+  const w = videoWrap.clientWidth, h = videoWrap.clientHeight;
+  ['index', 'score'].forEach(key => {
+    const el = document.getElementById(key + 'Box');
+    const b = boxes[key];
+    el.style.left = (b.left/100*w) + 'px';
+    el.style.top = (b.top/100*h) + 'px';
+    el.style.width = (b.width/100*w) + 'px';
+    el.style.height = (b.height/100*h) + 'px';
+  });
+}
+
+// ---- Drag & resize handling (pointer events cover mouse + touch) ----
+function setupBoxInteraction() {
+  ['index', 'score'].forEach(key => {
+    const el = document.getElementById(key + 'Box');
+    const handle = el.querySelector('.resize-handle');
+
+    el.addEventListener('pointerdown', (e) => {
+      if (e.target === handle) return; // handled separately below
+      e.preventDefault();
+      const w = videoWrap.clientWidth, h = videoWrap.clientHeight;
+      const startX = e.clientX, startY = e.clientY;
+      const startBox = { ...boxes[key] };
+
+      function onMove(ev) {
+        const dxPct = (ev.clientX - startX) / w * 100;
+        const dyPct = (ev.clientY - startY) / h * 100;
+        boxes[key].left = clamp(startBox.left + dxPct, 0, 100 - boxes[key].width);
+        boxes[key].top = clamp(startBox.top + dyPct, 0, 100 - boxes[key].height);
+        renderBoxes();
+      }
+      function onUp() {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        saveBoxes();
+      }
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const w = videoWrap.clientWidth, h = videoWrap.clientHeight;
+      const startX = e.clientX, startY = e.clientY;
+      const startBox = { ...boxes[key] };
+
+      function onMove(ev) {
+        const dwPct = (ev.clientX - startX) / w * 100;
+        const dhPct = (ev.clientY - startY) / h * 100;
+        boxes[key].width = clamp(startBox.width + dwPct, 6, 100 - boxes[key].left);
+        boxes[key].height = clamp(startBox.height + dhPct, 5, 100 - boxes[key].top);
+        renderBoxes();
+      }
+      function onUp() {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        saveBoxes();
+      }
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+  });
+}
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
 
 async function startScanning() {
   document.getElementById('startBtn').classList.add('hidden');
@@ -163,12 +243,18 @@ async function startScanning() {
 
   video = document.getElementById('video');
   freezeCanvas = document.getElementById('freezeCanvas');
+  videoWrap = document.getElementById('videoWrap');
 
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
     video.srcObject = stream;
     await video.play();
-    setScanStatus('Position the boxes, then tap Capture.');
+    renderBoxes();
+    setupBoxInteraction();
+    window.addEventListener('resize', renderBoxes);
+    setScanStatus('Position the boxes, then tap Capture');
   } catch (err) {
     setScanStatus('Camera access failed: ' + err.message);
   }
@@ -186,107 +272,53 @@ function setScanStatus(text) {
   document.getElementById('scanStatus').textContent = text;
 }
 
-// ---- Draggable / resizable crop-frame overlays ----
-// touch-action: none lives only on .crop-box / .resize-handle (see CSS), so
-// dragging these never blocks scrolling anywhere else on the page.
-function makeDraggable(boxEl) {
-  let dragging = false, startX, startY, startLeft, startTop;
-  const wrapEl = document.getElementById('videoWrap');
+async function captureAndRead() {
+  setScanStatus('Captured — reading...');
 
-  boxEl.addEventListener('pointerdown', (e) => {
-    if (e.target.classList.contains('resize-handle')) return;
-    dragging = true;
-    boxEl.setPointerCapture(e.pointerId);
-    const wrapRect = wrapEl.getBoundingClientRect();
-    const boxRect = boxEl.getBoundingClientRect();
-    startX = e.clientX; startY = e.clientY;
-    startLeft = boxRect.left - wrapRect.left;
-    startTop = boxRect.top - wrapRect.top;
-  });
-  boxEl.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const wrapRect = wrapEl.getBoundingClientRect();
-    const boxRect = boxEl.getBoundingClientRect();
-    let newLeft = startLeft + (e.clientX - startX);
-    let newTop = startTop + (e.clientY - startY);
-    newLeft = Math.max(0, Math.min(newLeft, wrapRect.width - boxRect.width));
-    newTop = Math.max(0, Math.min(newTop, wrapRect.height - boxRect.height));
-    boxEl.style.left = newLeft + 'px';
-    boxEl.style.top = newTop + 'px';
-  });
-  boxEl.addEventListener('pointerup', () => { dragging = false; });
-  boxEl.addEventListener('pointercancel', () => { dragging = false; });
+  freezeCanvas.width = video.videoWidth;
+  freezeCanvas.height = video.videoHeight;
+  freezeCanvas.getContext('2d').drawImage(video, 0, 0);
+  freezeCanvas.classList.remove('hidden');
+
+  await readAndShow();
 }
 
-function makeResizable(boxEl, handleEl) {
-  let resizing = false, startX, startY, startW, startH;
-  const wrapEl = document.getElementById('videoWrap');
-
-  handleEl.addEventListener('pointerdown', (e) => {
-    e.stopPropagation();
-    resizing = true;
-    handleEl.setPointerCapture(e.pointerId);
-    const boxRect = boxEl.getBoundingClientRect();
-    startX = e.clientX; startY = e.clientY;
-    startW = boxRect.width; startH = boxRect.height;
-  });
-  handleEl.addEventListener('pointermove', (e) => {
-    if (!resizing) return;
-    e.stopPropagation();
-    const wrapRect = wrapEl.getBoundingClientRect();
-    const boxRect = boxEl.getBoundingClientRect();
-    const maxW = wrapRect.right - boxRect.left;
-    const maxH = wrapRect.bottom - boxRect.top;
-    let newW = Math.max(40, Math.min(startW + (e.clientX - startX), maxW));
-    let newH = Math.max(24, Math.min(startH + (e.clientY - startY), maxH));
-    boxEl.style.width = newW + 'px';
-    boxEl.style.height = newH + 'px';
-  });
-  handleEl.addEventListener('pointerup', () => { resizing = false; });
-  handleEl.addEventListener('pointercancel', () => { resizing = false; });
+// ---- Crop exactly what the user positioned, then lightly trim inner whitespace ----
+function preprocess(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.3*d[i] + 0.59*d[i+1] + 0.11*d[i+2];
+    const v = gray < 150 ? 0 : 255;
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas;
 }
 
-const indexBoxEl = document.getElementById('indexBox');
-const scoreBoxEl = document.getElementById('scoreBox');
-makeDraggable(indexBoxEl);
-makeResizable(indexBoxEl, indexBoxEl.querySelector('.resize-handle'));
-makeDraggable(scoreBoxEl);
-makeResizable(scoreBoxEl, scoreBoxEl.querySelector('.resize-handle'));
+function cropFromFreeze(box) {
+  // Convert box % (of the displayed, cover-cropped container) into actual video pixel coords
+  const cw = videoWrap.clientWidth, ch = videoWrap.clientHeight;
+  const vw = freezeCanvas.width, vh = freezeCanvas.height;
+  const scale = Math.max(cw / vw, ch / vh);
+  const dispW = vw * scale, dispH = vh * scale;
+  const offsetX = (cw - dispW) / 2;
+  const offsetY = (ch - dispH) / 2;
 
-// Maps a crop-box's on-screen position/size (CSS px, relative to the video
-// wrap) into true source-pixel coordinates on the captured frame, undoing
-// the crop-and-scale that object-fit: cover applies to the displayed video.
-function mapBoxToSource(boxEl) {
-  const wrapRect = document.getElementById('videoWrap').getBoundingClientRect();
-  const boxRect = boxEl.getBoundingClientRect();
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const Wd = wrapRect.width, Hd = wrapRect.height;
+  const boxLeftPx = box.left / 100 * cw;
+  const boxTopPx = box.top / 100 * ch;
+  const boxWidthPx = box.width / 100 * cw;
+  const boxHeightPx = box.height / 100 * ch;
 
-  const scale = Math.max(Wd / vw, Hd / vh);
-  const cropX = (vw * scale - Wd) / 2 / scale;
-  const cropY = (vh * scale - Hd) / 2 / scale;
+  const left = (boxLeftPx - offsetX) / scale;
+  const top = (boxTopPx - offsetY) / scale;
+  const sw = boxWidthPx / scale;
+  const sh = boxHeightPx / scale;
 
-  const dispX = boxRect.left - wrapRect.left;
-  const dispY = boxRect.top - wrapRect.top;
-
-  const left = dispX / scale + cropX;
-  const top = dispY / scale + cropY;
-  const right = (dispX + boxRect.width) / scale + cropX;
-  const bottom = (dispY + boxRect.height) / scale + cropY;
-
-  return {
-    left: Math.max(0, Math.round(left)),
-    top: Math.max(0, Math.round(top)),
-    right: Math.min(vw, Math.round(right)),
-    bottom: Math.min(vh, Math.round(bottom))
-  };
-}
-
-function cropFromFreeze(left, top, right, bottom) {
+  const zoom = sh < 80 ? 3 : 1.5;
   const canvas = document.createElement('canvas');
-  const sw = right - left, sh = bottom - top;
-  const scale = sh < 60 ? 3 : 1.5; // upscale small crops for better OCR
-  canvas.width = sw * scale; canvas.height = sh * scale;
+  canvas.width = sw * zoom; canvas.height = sh * zoom;
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(freezeCanvas, left, top, sw, sh, 0, 0, canvas.width, canvas.height);
@@ -295,83 +327,89 @@ function cropFromFreeze(left, top, right, bottom) {
 
 let workerPromise = null;
 async function getWorker() {
-  if (!workerPromise) {
-    workerPromise = (async () => await Tesseract.createWorker('eng'))();
-  }
+  if (!workerPromise) workerPromise = (async () => await Tesseract.createWorker('eng'))();
   return workerPromise;
 }
 async function ocrLine(canvas, whitelist) {
   const worker = await getWorker();
-  const params = { tessedit_pageseg_mode: '7' };
-  if (whitelist) params.tessedit_char_whitelist = whitelist;
-  else params.tessedit_char_whitelist = ''; // no restriction — read whatever characters appear
-  await worker.setParameters(params);
+  await worker.setParameters({ tessedit_char_whitelist: whitelist, tessedit_pageseg_mode: '7' });
   const { data } = await worker.recognize(canvas);
   return { text: (data.text || '').trim(), confidence: data.confidence || 0 };
 }
 
 let lastReading = null;
+let confirmed = { indexNumber: false, score: false };
 
-async function cropAndCapture() {
-  if (!video || video.readyState < 2) return;
-
-  setScanStatus('Reading box positions...');
-
-  // 1. CROP FIRST — work out exactly which source-pixel rectangles the two
-  //    boxes cover while the video is still live, before anything is frozen.
-  const idxRect = mapBoxToSource(indexBoxEl);
-  const scoreRect = mapBoxToSource(scoreBoxEl);
-
-  // 2. CAPTURE — grab the frame those rectangles were measured against into an
-  //    off-screen buffer for cropping. It's never shown — the live camera
-  //    (already running continuously) stays on screen the whole time, so
-  //    there's no freeze at all, not even during OCR.
-  freezeCanvas.width = video.videoWidth;
-  freezeCanvas.height = video.videoHeight;
-  freezeCanvas.getContext('2d').drawImage(video, 0, 0);
-  setScanStatus('Captured — reading crops...');
-
+async function readAndShow() {
   try {
-    const indexCanvas = cropFromFreeze(idxRect.left, idxRect.top, idxRect.right, idxRect.bottom);
-    const scoreCanvas = cropFromFreeze(scoreRect.left, scoreRect.top, scoreRect.right, scoreRect.bottom);
+    const indexCanvas = preprocess(cropFromFreeze(boxes.index));
+    const scoreCanvas = preprocess(cropFromFreeze(boxes.score));
 
-    // show exactly what was cropped, so the human verifier can check it
     drawToView('indexCropView', indexCanvas);
     drawToView('scoreCropView', scoreCanvas);
 
-    const indexResult = await ocrLine(indexCanvas);
-    const scoreResult = await ocrLine(scoreCanvas);
+    const indexResult = await ocrLine(indexCanvas, '0123456789/');
+    const scoreResult = await ocrLine(scoreCanvas, '0123456789');
 
-    const MIN_FIELD_CONF = 45; // below this, treat the crop as illegible rather than filling in noise
-    const indexLegible = indexResult.confidence >= MIN_FIELD_CONF && indexResult.text.length > 0;
-    const scoreLegible = scoreResult.confidence >= MIN_FIELD_CONF && scoreResult.text.length > 0;
-
-    const indexNumber = indexLegible ? indexResult.text : '';
-    const score = scoreLegible ? scoreResult.text : '';
+    const indexNumber = indexResult.text.replace(/[^0-9/]/g, '');
+    const score = scoreResult.text.replace(/\D/g, '');
     const avgConf = (indexResult.confidence + scoreResult.confidence) / 2;
 
     let confLabel;
-    if (avgConf >= 85 && indexLegible && scoreLegible) confLabel = `High (${avgConf.toFixed(0)}%)`;
+    if (avgConf >= 85 && indexNumber && score) confLabel = `High (${avgConf.toFixed(0)}%)`;
     else if (avgConf >= 65) confLabel = `Medium (${avgConf.toFixed(0)}%)`;
     else confLabel = `Low (${avgConf.toFixed(0)}%)`;
 
     lastReading = { confLabel };
+    confirmed = { indexNumber: false, score: false };
 
     document.getElementById('indexNumber').value = indexNumber;
     document.getElementById('score').value = score;
     document.getElementById('confidenceText').textContent = confLabel;
 
     const flagEl = document.getElementById('confidenceFlag');
-    flagEl.innerHTML = (!indexLegible || !scoreLegible)
-      ? '<div class="flag">⚠ Nothing legible was captured for ' +
-        [!indexLegible ? 'the index number' : null, !scoreLegible ? 'the score' : null].filter(Boolean).join(' and ') +
-        ' — reposition the box over it and capture again, or enter it manually.</div>'
+    flagEl.innerHTML = (confLabel.startsWith('Low') || !indexNumber || !score)
+      ? '<div class="flag">⚠ Low confidence or a field came back empty — check the crops below and correct as needed.</div>'
       : '';
 
     document.getElementById('resultCard').classList.remove('hidden');
-    setScanStatus('Ready — adjust the boxes for the next booklet and capture again.');
+    setScanStatus('Ready for next booklet — tap Capture when ready.');
+
+    broadcastLive(indexCanvas, scoreCanvas, indexNumber, score, confLabel);
   } catch (err) {
     setScanStatus('Reading failed: ' + err.message);
+  }
+}
+
+// ---- Send the latest capture to the desktop Viewer page via the Sheet's Apps Script relay ----
+function broadcastLive(indexCanvas, scoreCanvas, indexText, scoreText, confidence) {
+  const scriptUrl = S.get('sheet_url');
+  if (!scriptUrl) return;
+  const indexImage = indexCanvas.toDataURL('image/jpeg', 0.5);
+  const scoreImage = scoreCanvas.toDataURL('image/jpeg', 0.5);
+  fetch(scriptUrl, {
+    method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({
+      action: 'live', indexImage, scoreImage, indexText, scoreText, confidence,
+      timestamp: new Date().toISOString()
+    })
+  }).catch(() => {}); // best-effort — never blocks the main phone workflow
+}
+
+// ---- Copy button: copies to clipboard, marks field confirmed, auto-saves once both confirmed ----
+async function copyField(fieldId) {
+  const input = document.getElementById(fieldId);
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch (err) {
+    input.select(); // fallback for browsers without clipboard API permission
+  }
+  confirmed[fieldId] = true;
+  const statusEl = document.getElementById('saveStatus');
+  statusEl.textContent = 'Copied.'; statusEl.className = 'status ok';
+
+  if (confirmed.indexNumber && confirmed.score) {
+    saveToSheet();
   }
 }
 
@@ -385,7 +423,7 @@ function drawToView(canvasId, sourceCanvas) {
 function discardAndRescan() {
   document.getElementById('resultCard').classList.add('hidden');
   freezeCanvas.classList.add('hidden');
-  setScanStatus('Position the boxes, then tap Capture.');
+  setScanStatus('Position the boxes, then tap Capture');
 }
 
 async function saveToSheet() {
