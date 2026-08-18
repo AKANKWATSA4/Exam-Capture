@@ -40,11 +40,24 @@
   .crop-box {
     position: absolute; border: 2px solid #ff9500; background: rgba(255,149,0,0.12);
     cursor: move; box-sizing: border-box;
+    background-image:
+      repeating-linear-gradient(to right, rgba(255,255,255,0.35) 0 1px, transparent 1px 10px),
+      repeating-linear-gradient(to bottom, rgba(255,255,255,0.35) 0 1px, transparent 1px 10px);
   }
-  .crop-box.score { border-color: #34c759; background: rgba(52,199,89,0.12); }
+  .crop-box.score {
+    border-color: #34c759; background: rgba(52,199,89,0.12);
+    background-image:
+      repeating-linear-gradient(to right, rgba(255,255,255,0.35) 0 1px, transparent 1px 10px),
+      repeating-linear-gradient(to bottom, rgba(255,255,255,0.35) 0 1px, transparent 1px 10px);
+  }
   .crop-label {
     position: absolute; top: -20px; left: 0; font-size: 11px; color: white;
     background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; pointer-events: none;
+  }
+  .size-label {
+    position: absolute; bottom: 2px; right: 2px; font-size: 10px; color: white;
+    background: rgba(0,0,0,0.6); padding: 1px 5px; border-radius: 4px; pointer-events: none;
+    font-variant-numeric: tabular-nums;
   }
   .resize-handle {
     position: absolute; right: -8px; bottom: -8px; width: 20px; height: 20px;
@@ -77,10 +90,12 @@
 
       <div class="crop-box index" id="indexBox">
         <div class="crop-label">Index number</div>
+        <div class="size-label" id="indexSizeLabel"></div>
         <div class="resize-handle" data-box="index"></div>
       </div>
       <div class="crop-box score" id="scoreBox">
         <div class="crop-label">Score</div>
+        <div class="size-label" id="scoreSizeLabel"></div>
         <div class="resize-handle" data-box="score"></div>
       </div>
 
@@ -167,8 +182,14 @@ function resetBoxPositions() {
   el.textContent = 'Box positions reset.'; el.className = 'status ok';
 }
 
+let containerSize = { w: 0, h: 0 };
+function updateContainerSize() {
+  if (videoWrap) { containerSize.w = videoWrap.clientWidth; containerSize.h = videoWrap.clientHeight; }
+}
+
 function renderBoxes() {
-  const w = videoWrap.clientWidth, h = videoWrap.clientHeight;
+  const w = containerSize.w, h = containerSize.h;
+  if (!w || !h) return;
   ['index', 'score'].forEach(key => {
     const el = document.getElementById(key + 'Box');
     const b = boxes[key];
@@ -176,7 +197,27 @@ function renderBoxes() {
     el.style.top = (b.top/100*h) + 'px';
     el.style.width = (b.width/100*w) + 'px';
     el.style.height = (b.height/100*h) + 'px';
+
+    // Live measured size in actual video pixels (what OCR will actually see) —
+    // uses the same cover-crop math as the real crop, so the number is accurate.
+    const label = document.getElementById(key + 'SizeLabel');
+    if (label && video && video.videoWidth) {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const scale = Math.max(w / vw, h / vh);
+      const pxW = Math.round((b.width/100*w) / scale);
+      const pxH = Math.round((b.height/100*h) / scale);
+      label.textContent = `${pxW}×${pxH}px`;
+    }
   });
+}
+
+// Batches renders to at most once per animation frame, no matter how fast
+// pointermove fires — this is what fixes the sluggish dragging.
+let rafPending = false;
+function scheduleRender() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => { renderBoxes(); rafPending = false; });
 }
 
 // ---- Drag & resize handling (pointer events cover mouse + touch) ----
@@ -188,7 +229,7 @@ function setupBoxInteraction() {
     el.addEventListener('pointerdown', (e) => {
       if (e.target === handle) return; // handled separately below
       e.preventDefault();
-      const w = videoWrap.clientWidth, h = videoWrap.clientHeight;
+      const w = containerSize.w, h = containerSize.h;
       const startX = e.clientX, startY = e.clientY;
       const startBox = { ...boxes[key] };
 
@@ -197,7 +238,7 @@ function setupBoxInteraction() {
         const dyPct = (ev.clientY - startY) / h * 100;
         boxes[key].left = clamp(startBox.left + dxPct, 0, 100 - boxes[key].width);
         boxes[key].top = clamp(startBox.top + dyPct, 0, 100 - boxes[key].height);
-        renderBoxes();
+        scheduleRender();
       }
       function onUp() {
         document.removeEventListener('pointermove', onMove);
@@ -211,7 +252,7 @@ function setupBoxInteraction() {
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const w = videoWrap.clientWidth, h = videoWrap.clientHeight;
+      const w = containerSize.w, h = containerSize.h;
       const startX = e.clientX, startY = e.clientY;
       const startBox = { ...boxes[key] };
 
@@ -220,7 +261,7 @@ function setupBoxInteraction() {
         const dhPct = (ev.clientY - startY) / h * 100;
         boxes[key].width = clamp(startBox.width + dwPct, 6, 100 - boxes[key].left);
         boxes[key].height = clamp(startBox.height + dhPct, 5, 100 - boxes[key].top);
-        renderBoxes();
+        scheduleRender();
       }
       function onUp() {
         document.removeEventListener('pointermove', onMove);
@@ -251,9 +292,10 @@ async function startScanning() {
     });
     video.srcObject = stream;
     await video.play();
+    updateContainerSize();
     renderBoxes();
     setupBoxInteraction();
-    window.addEventListener('resize', renderBoxes);
+    window.addEventListener('resize', () => { updateContainerSize(); renderBoxes(); });
     setScanStatus('Position the boxes, then tap Capture');
   } catch (err) {
     setScanStatus('Camera access failed: ' + err.message);
