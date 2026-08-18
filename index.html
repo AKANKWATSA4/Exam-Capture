@@ -39,7 +39,8 @@
   .scan-status { text-align: center; font-size: 12px; color: white; background: rgba(0,0,0,0.55); position: absolute; bottom: 8px; left: 8px; right: 8px; padding: 6px; border-radius: 8px; pointer-events: none; }
   .crop-box {
     position: absolute; border: 2px solid #ff9500; background: rgba(255,149,0,0.12);
-    cursor: move; box-sizing: border-box;
+    box-sizing: border-box;
+    touch-action: none; -webkit-user-drag: none; user-select: none;
     background-image:
       repeating-linear-gradient(to right, rgba(255,255,255,0.35) 0 1px, transparent 1px 10px),
       repeating-linear-gradient(to bottom, rgba(255,255,255,0.35) 0 1px, transparent 1px 10px);
@@ -60,10 +61,23 @@
     font-variant-numeric: tabular-nums;
   }
   .resize-handle {
-    position: absolute; right: -8px; bottom: -8px; width: 20px; height: 20px;
-    background: #ff9500; border: 2px solid white; border-radius: 50%; cursor: se-resize;
+    position: absolute; background: #ff9500; border: 2px solid white;
+    touch-action: none; z-index: 2;
   }
   .crop-box.score .resize-handle { background: #34c759; }
+  /* corners: small circles */
+  .handle-nw, .handle-ne, .handle-se, .handle-sw { width: 16px; height: 16px; border-radius: 50%; }
+  .handle-nw { left: -8px; top: -8px; cursor: nwse-resize; }
+  .handle-ne { right: -8px; top: -8px; cursor: nesw-resize; }
+  .handle-se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+  .handle-sw { left: -8px; bottom: -8px; cursor: nesw-resize; }
+  /* edges: short bars centered on each side */
+  .handle-n, .handle-s { width: 24px; height: 12px; border-radius: 6px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+  .handle-n { top: -6px; }
+  .handle-s { bottom: -6px; }
+  .handle-e, .handle-w { width: 12px; height: 24px; border-radius: 6px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+  .handle-e { right: -6px; }
+  .handle-w { left: -6px; }
   .status { font-size: 13px; margin: 8px 0; min-height: 18px; }
   .status.error { color: var(--danger); }
   .status.ok { color: var(--success); }
@@ -79,7 +93,7 @@
 <body>
 
   <h1>Exam mark capture</h1>
-  <p class="sub">Drag boxes over the numbers, capture, then copy or edit each value. A companion Viewer page can show the same capture on a computer.</p>
+  <p class="sub">Pull the edges or corners of the orange box to fit the index number, and the green box to fit the score. Positions are remembered for next time.</p>
 
   <div class="card" id="scanCard">
     <div class="badge scan">Live scanning</div>
@@ -91,12 +105,10 @@
       <div class="crop-box index" id="indexBox">
         <div class="crop-label">Index number</div>
         <div class="size-label" id="indexSizeLabel"></div>
-        <div class="resize-handle" data-box="index"></div>
       </div>
       <div class="crop-box score" id="scoreBox">
         <div class="crop-label">Score</div>
         <div class="size-label" id="scoreSizeLabel"></div>
-        <div class="resize-handle" data-box="score"></div>
       </div>
 
       <div class="scan-status" id="scanStatus">Position the boxes, then tap Capture</div>
@@ -220,56 +232,65 @@ function scheduleRender() {
   requestAnimationFrame(() => { renderBoxes(); rafPending = false; });
 }
 
-// ---- Drag & resize handling (pointer events cover mouse + touch) ----
+// ---- Resize-only interaction: 8 handles (4 corners + 4 edges), no whole-box dragging ----
+const MIN_W = 6, MIN_H = 5; // minimum box size, in % of container
+
+function applyResize(key, dir, startBox, dxPct, dyPct) {
+  const b = { ...startBox };
+
+  if (dir.includes('e')) {
+    b.width = clamp(startBox.width + dxPct, MIN_W, 100 - startBox.left);
+  }
+  if (dir.includes('s')) {
+    b.height = clamp(startBox.height + dyPct, MIN_H, 100 - startBox.top);
+  }
+  if (dir.includes('w')) {
+    const right = startBox.left + startBox.width;
+    const newLeft = clamp(startBox.left + dxPct, 0, right - MIN_W);
+    b.left = newLeft;
+    b.width = right - newLeft;
+  }
+  if (dir.includes('n')) {
+    const bottom = startBox.top + startBox.height;
+    const newTop = clamp(startBox.top + dyPct, 0, bottom - MIN_H);
+    b.top = newTop;
+    b.height = bottom - newTop;
+  }
+
+  boxes[key] = b;
+}
+
 function setupBoxInteraction() {
+  const directions = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
   ['index', 'score'].forEach(key => {
     const el = document.getElementById(key + 'Box');
-    const handle = el.querySelector('.resize-handle');
 
-    el.addEventListener('pointerdown', (e) => {
-      if (e.target === handle) return; // handled separately below
-      e.preventDefault();
-      const w = containerSize.w, h = containerSize.h;
-      const startX = e.clientX, startY = e.clientY;
-      const startBox = { ...boxes[key] };
+    directions.forEach(dir => {
+      const handle = document.createElement('div');
+      handle.className = 'resize-handle handle-' + dir;
+      el.appendChild(handle);
 
-      function onMove(ev) {
-        const dxPct = (ev.clientX - startX) / w * 100;
-        const dyPct = (ev.clientY - startY) / h * 100;
-        boxes[key].left = clamp(startBox.left + dxPct, 0, 100 - boxes[key].width);
-        boxes[key].top = clamp(startBox.top + dyPct, 0, 100 - boxes[key].height);
-        scheduleRender();
-      }
-      function onUp() {
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        saveBoxes();
-      }
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
-    });
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const w = containerSize.w, h = containerSize.h;
+        const startX = e.clientX, startY = e.clientY;
+        const startBox = { ...boxes[key] };
 
-    handle.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const w = containerSize.w, h = containerSize.h;
-      const startX = e.clientX, startY = e.clientY;
-      const startBox = { ...boxes[key] };
-
-      function onMove(ev) {
-        const dwPct = (ev.clientX - startX) / w * 100;
-        const dhPct = (ev.clientY - startY) / h * 100;
-        boxes[key].width = clamp(startBox.width + dwPct, 6, 100 - boxes[key].left);
-        boxes[key].height = clamp(startBox.height + dhPct, 5, 100 - boxes[key].top);
-        scheduleRender();
-      }
-      function onUp() {
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        saveBoxes();
-      }
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
+        function onMove(ev) {
+          const dxPct = (ev.clientX - startX) / w * 100;
+          const dyPct = (ev.clientY - startY) / h * 100;
+          applyResize(key, dir, startBox, dxPct, dyPct);
+          scheduleRender();
+        }
+        function onUp() {
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+          saveBoxes();
+        }
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      });
     });
   });
 }
